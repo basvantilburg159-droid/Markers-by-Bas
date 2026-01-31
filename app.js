@@ -5,7 +5,6 @@
   const clientEl = document.getElementById('client');
   const pipeIdEl = document.getElementById('pipeId');
   const themeToggle = document.getElementById('themeToggle');
-  const syncIdEl = document.getElementById('syncId');
   const syncEnabledEl = document.getElementById('syncEnabled');
   const cloudFileNameEl = document.getElementById('cloudFileName');
   const cloudFilesListEl = document.getElementById('cloudFilesList');
@@ -147,7 +146,6 @@
     showNavigate: true,
     exportName: '',
     theme: 'dark',
-    syncId: '',
     syncEnabled: false,
     pts: [
       { n: 'Launcher', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
@@ -175,7 +173,6 @@
     state.showNavigate = state.showNavigate !== false;
     state.exportName = state.exportName || '';
     state.theme = state.theme === 'light' ? 'light' : 'dark';
-    state.syncId = state.syncId || '';
     state.syncEnabled = !!state.syncEnabled;
     state.pipeSize = state.pipeSize ?? '';
     state.pipeWt = state.pipeWt ?? '';
@@ -244,7 +241,7 @@
   };
 
   const getCloudSyncName = () => (cloudFileNameEl ? cloudFileNameEl.value.trim() : '');
-  const getSyncDocId = () => sanitizeDocId(getCloudSyncName() || state.syncId || state.project || '');
+  const getSyncDocId = () => sanitizeDocId(getCloudSyncName() || state.project || '');
 
   const initFirebase = () => {
     if (!window.firebase || !window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.projectId) return false;
@@ -382,7 +379,7 @@
     }
     const docId = getSyncDocId();
     if (!docId) {
-      if (statusEl) statusEl.textContent = 'Enter a Sync ID to enable realtime updates.';
+      if (statusEl) statusEl.textContent = 'Enter a cloud file name to enable realtime updates.';
       return;
     }
     stopSync();
@@ -1156,7 +1153,6 @@
     projectEl.value = state.project;
     if (clientEl) clientEl.value = state.client || '';
     if (pipeIdEl) pipeIdEl.value = state.pipeId || '';
-    if (syncIdEl) syncIdEl.value = state.syncId || '';
     if (syncEnabledEl) syncEnabledEl.checked = !!state.syncEnabled;
     if (userModeToggle) userModeToggle.checked = !operatorMode;
     if (modeSelectEl) modeSelectEl.value = state.mode || 'manual';
@@ -1223,7 +1219,6 @@
     if (projectEl) projectEl.disabled = editLocked;
     if (clientEl) clientEl.disabled = editLocked;
     if (pipeIdEl) pipeIdEl.disabled = editLocked;
-    if (syncIdEl) syncIdEl.disabled = editLocked;
     if (syncEnabledEl) syncEnabledEl.disabled = editLocked;
     if (cloudFileNameEl) cloudFileNameEl.disabled = editLocked;
     if (cloudFilesListEl) cloudFilesListEl.disabled = editLocked;
@@ -3426,11 +3421,6 @@
   projectEl.oninput = () => { state.project = projectEl.value; saveLocal(); };
   if (clientEl) clientEl.oninput = () => { state.client = clientEl.value; saveLocal(); };
   if (pipeIdEl) pipeIdEl.oninput = () => { state.pipeId = pipeIdEl.value; saveLocal(); };
-  if (syncIdEl) syncIdEl.oninput = () => {
-    state.syncId = syncIdEl.value;
-    saveLocal();
-    if (state.syncEnabled) startSync();
-  };
   if (syncEnabledEl) syncEnabledEl.onchange = () => {
     state.syncEnabled = !!syncEnabledEl.checked;
     saveLocal();

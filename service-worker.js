@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pigging-pwa-v2.01.7';
+const CACHE_NAME = 'pigging-pwa-v2.01.8';
 const ASSETS = [
   './',
   './index.html',
