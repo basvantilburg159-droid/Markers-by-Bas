@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Markers by Bas V2.0</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    :root { --bg:#0d0d0d; --panel:#151515; --line:#2a2a2a; --text:#e6e6e6; --muted:#aaa; --accent:#f6b000; }
+    body { background:var(--bg); color:var(--text); font-family:Segoe UI,Arial,sans-serif; margin:0; padding:16px; }
+    h1 { margin:0; color:var(--accent); }
+    .header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:0 0 12px; }
+    .mode-toggle { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+    .mode-toggle .mode-caption { color:var(--text); font-weight:600; font-size:12px; }
+    .switch { position:relative; display:inline-block; width:44px; height:22px; }
+    .switch input { opacity:0; width:0; height:0; }
+    .slider { position:absolute; cursor:pointer; inset:0; background:#333; border:1px solid var(--line); border-radius:22px; transition:0.2s; }
+    .slider:before { content:""; position:absolute; height:18px; width:18px; left:2px; top:1px; background:white; border-radius:50%; transition:0.2s; }
+    .switch input:checked + .slider { background:var(--accent); }
+    .switch input:checked + .slider:before { transform:translateX(22px); }
+    input, button, textarea, select { font-size:14px; }
+    input, textarea, select { background:#1c1c1c; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px 8px; }
+    input:disabled, textarea:disabled, select:disabled { opacity:0.5; cursor:not-allowed; }
+    input[type="time"] { color-scheme:dark; }
+    button { background:var(--accent); color:#111; border:none; border-radius:4px; padding:8px 12px; font-weight:600; cursor:pointer; }
+    button.secondary { background:#444; color:#eee; }
+    button.small { padding:4px 8px; font-size:12px; }
+    button:disabled { opacity:0.5; cursor:not-allowed; background:#555; color:#b5b5b5; border-color:#555; }
+    .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:10px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; margin-bottom:12px; }
+    .layout { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+    .layout .panel { flex:1; min-width:320px; }
+    label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+    table { width:100%; border-collapse:collapse; margin-top:8px; }
+    th, td { border:1px solid var(--line); padding:6px 8px; white-space:nowrap; }
+    th { position:sticky; top:0; background:#111; color:var(--accent); }
+    .status { margin-top:6px; font-size:12px; color:var(--muted); }
+    .hint { font-size:11px; color:var(--muted); }
+    .flex-gap { display:flex; gap:8px; flex-wrap:wrap; }
+    .spacer { flex:1; }
+    .export-options { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); grid-auto-flow:column; gap:6px 24px; align-items:center; margin:0; padding:4px 0; }
+    .export-options label { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--text); justify-content:flex-start; }
+    .export-options input[type="checkbox"] { accent-color:var(--accent); width:16px; height:16px; }
+    .missed { color:#f55; font-weight:600; margin-right:6px; }
+    .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:999; }
+    .modal.show { display:flex; }
+    .modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(2px); }
+    .modal-content { position:relative; background:#111; border:1px solid var(--line); border-radius:8px; padding:12px; width:98vw; max-width:1400px; max-height:92vh; overflow:auto; box-shadow:0 12px 32px rgba(0,0,0,0.45); }
+    .modal-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
+    .modal-body { display:flex; flex-direction:column; gap:12px; }
+    .modal-column { flex:1; min-width:260px; }
+    .preview-table { max-height:420px; overflow:auto; border:1px solid var(--line); border-radius:6px; margin-top:8px; }
+    .preview-table table { width:max-content; min-width:100%; table-layout:auto; border-collapse:collapse; }
+    .preview-table th, .preview-table td { border:1px solid var(--line); padding:6px 8px; white-space:nowrap; }
+    .modal-footer { margin-top:10px; display:flex; justify-content:flex-end; gap:8px; }
+    .select-table { max-height:360px; overflow:auto; border:1px solid var(--line); border-radius:6px; margin-top:6px; }
+    .select-table table { width:100%; border-collapse:collapse; }
+    .select-table th, .select-table td { border:1px solid var(--line); padding:6px 8px; white-space:nowrap; }
+    .select-table tr.active { background:#1f1f1f; }
+    .mini-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px; }
+    .tables-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:flex-start; margin-top:6px; }
+    .tables-row > div { min-width:0; }
+    .tables-row .block { display:flex; flex-direction:column; gap:8px; min-width:0; }
+    .table-wrap { overflow:auto; max-height:70vh; }
+    .export-epsg { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .export-epsg select { min-width:180px; }
+    .input-row { display:flex; align-items:center; gap:8px; }
+    .input-row .input-label { min-width:150px; text-align:left; font-size:12px; color:var(--muted); }
+    .input-row input { width:70px; }
+    .kmz-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .kmz-toolbar label { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--text); }
+    .kmz-toolbar select { min-width:200px; }
+    .kmz-table th, .kmz-table td { vertical-align:middle; }
+    .kmz-icon-preview { width:22px; height:22px; display:inline-block; }
+    .kmz-desc-input { width:100%; min-width:200px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>
+      <span>Markers by Bas</span>
+      <span style="font-size:12px; color:#e6e6e6; opacity:0.8; margin-left:6px;">V2.0</span>
+    </h1>
+    <div class="mode-toggle" aria-label="User mode">
+      <span class="mode-caption">Operator</span>
+      <label class="switch">
+        <input id="userModeToggle" type="checkbox" checked>
+        <span class="slider"></span>
+      </label>
+      <span class="mode-caption">Expert</span>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="panel">
+      <div class="row" style="align-items:flex-start; align-content:flex-start;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
+          <label>
+            Project number
+            <input id="project" value="New Run">
+          </label>
+          <label>
+            Client
+            <input id="client" value="">
+          </label>
+          <label>
+            Pipe ID
+            <input id="pipeId" value="">
+          </label>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
+          <label>
+            Mode
+            <select id="modeSelect" style="min-width:200px;">
+              <option value="manual">Manual speed</option>
+              <option value="calc">From flow and volume</option>
+              <option value="pipe">Calculate from pipe specs</option>
+            </select>
+          </label>
+          <div id="speedRow" class="input-row">
+            <span class="input-label">Speed (m/h)</span>
+            <input id="speed" type="number" value="1000" max="9999" style="width:70px;">
+          </div>
+          <div id="flowRow" class="input-row">
+            <span class="input-label">Flow (m3/h)</span>
+            <input id="flow" type="number" placeholder="" max="999" style="width:70px;">
+          </div>
+          <div id="flowOffsetRow" class="input-row">
+            <span class="input-label">Flow meter offset (m3/h)</span>
+            <input id="flowOffset" type="number" value="0" step="0.1" min="-100000" max="9999" inputmode="decimal" style="width:70px;" placeholder="-5 or 10">
+          </div>
+          <span id="calcSpeedDisplay" class="hint"></span>
+          <div id="volRow" class="input-row">
+            <span class="input-label">Volume (m3/km)</span>
+            <input id="vol" type="number" placeholder="" max="9999" style="width:70px;">
+          </div>
+          <div id="pipeSizeRow" class="input-row">
+            <span class="input-label">Pipe size (inch)</span>
+            <input id="pipeSize" type="number" placeholder="" max="9999" style="width:70px;">
+          </div>
+          <div id="pipeWtRow" class="input-row">
+            <span class="input-label">WT (mm)</span>
+            <input id="pipeWt" type="text" placeholder="0.00" inputmode="decimal" pattern="^\d*(?:[\.,]\d{0,2})?$" style="width:70px;">
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:200px;">
+          <label>
+            Launch time
+            <input id="launch" type="time" step="1" value="08:30:00">
+          </label>
+          <label>
+            Launch date
+            <input id="launchDate" type="date">
+          </label>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:190px;">
+          <div style="font-size:12px; color:var(--muted);">Options</div>
+          <button id="newProject">New project</button>
+          <button id="loadJson">Load markerlist</button>
+          <button id="saveJson">Save markerlist</button>
+          <button id="addMarker">Add manual marker</button>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:170px;">
+          <div style="font-size:12px; color:var(--muted);">Display</div>
+          <button id="displayCoordsBtn">Display coordinates</button>
+          <button id="graphsBtn">Graphs</button>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted);">
+            Display EPSG
+            <select id="displayEpsg" style="min-width:160px; font-size:14px; color:var(--text); background:#1c1c1c; border:1px solid var(--line);">
+              <option value="EPSG:4326">EPSG:4326 — WGS84 lat/lon</option>
+              <option value="EPSG:3857">EPSG:3857 — Web Mercator (m)</option>
+              <option value="EPSG:28992">EPSG:28992 — Rijksdriehoek (RD)</option>
+              <option value="UTM">UTM (auto zone, WGS84)</option>
+            </select>
+          </label>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:200px;">
+          <div style="font-size:12px; color:var(--muted);">Import</div>
+          <button id="importXlsxBtn">Import markers Excel</button>
+          <button id="gpsBtn">KMZ/GPS import</button>
+          <button id="gpsCsvBtn">Import .CSV (Geomeet)</button>
+          <input type="file" id="gpsCsvInput" hidden accept=".csv">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:170px;">
+          <div style="font-size:12px; color:var(--muted);">Export</div>
+          <button id="exportXlsx">Export to Excel</button>
+          <button id="exportPdf">Export to PDF</button>
+          <button id="exportKmz">Export to KMZ</button>
+        </div>
+        <span class="spacer"></span>
+      </div>
+
+    </div>
+  </div>
+  <div id="status" class="status">Offline-capable demo. Data is stored locally.</div>
+  <div class="panel table-wrap">
+    <table id="table"></table>
+  </div>
+
+  <input type="file" id="fileInput" hidden accept=".json">
+  <input type="file" id="importXlsxInput" hidden accept=".xlsx,.xls,.csv">
+
+  <div id="exportPreviewModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="width:max-content; max-width:98vw;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Export to PDF</h3>
+        <button id="exportPreviewClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <div class="export-epsg">
+          <label style="color:var(--text); font-size:14px;">
+            Coordinate reference (EPSG)
+            <select id="exportEpsg">
+              <option value="EPSG:4326" selected>EPSG:4326 — WGS84 lat/lon</option>
+              <option value="EPSG:3857">EPSG:3857 — Web Mercator (m)</option>
+              <option value="EPSG:28992">EPSG:28992 — Rijksdriehoek (RD)</option>
+              <option value="UTM">UTM (auto zone, WGS84)</option>
+            </select>
+          </label>
+          <label style="color:var(--text); font-size:14px;">
+            PDF orientation
+            <select id="exportOrientation">
+              <option value="auto" selected>Auto (best fit)</option>
+              <option value="portrait">Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select>
+          </label>
+        </div>
+        <div class="export-options">
+          <label>
+            <input id="exportIncludeCoords" type="checkbox" checked> Include coordinates
+          </label>
+          <label>
+            <input id="exportIncludeExpTimes" type="checkbox" checked> Include expected times
+          </label>
+          <label>
+            <input id="exportIncludeDates" type="checkbox" checked> Include expected dates
+          </label>
+          <label>
+            <input id="exportIncludeActualTimes" type="checkbox" checked> Include actual times
+          </label>
+        </div>
+        <div class="panel" style="max-height:360px; overflow:auto; margin:6px 0 0 0;">
+          <table id="exportPreviewTable" style="width:max-content; min-width:100%; table-layout:auto; border-collapse:collapse;"></table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="exportPreviewConfirm">Export PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="exportExcelModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:900px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Export to Excel</h3>
+        <button id="exportExcelClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <div class="export-epsg" style="align-items:flex-start;">
+          <label style="color:var(--text); font-size:14px; min-width:220px;">
+            Coordinate systems (select one or more)
+            <div class="flex-gap" style="margin-top:6px;">
+              <label><input id="exportExcelEpsg4326" type="checkbox" checked> EPSG:4326 (Lat/Lon)</label>
+              <label><input id="exportExcelEpsg3857" type="checkbox"> EPSG:3857 (X/Y)</label>
+              <label><input id="exportExcelEpsg28992" type="checkbox"> EPSG:28992 (RD X/Y)</label>
+              <label><input id="exportExcelEpsgUtm" type="checkbox"> UTM (East/North/Zone)</label>
+            </div>
+          </label>
+        </div>
+        <div class="export-options">
+          <label>
+            <input id="exportExcelIncludeCoords" type="checkbox" checked> Include coordinates
+          </label>
+          <label>
+            <input id="exportExcelIncludeExpTimes" type="checkbox" checked> Include expected times
+          </label>
+          <label>
+            <input id="exportExcelIncludeDates" type="checkbox" checked> Include expected dates
+          </label>
+          <label>
+            <input id="exportExcelIncludeExpVol" type="checkbox" checked> Include expected volume
+          </label>
+          <label>
+            <input id="exportExcelIncludeActualTimes" type="checkbox" checked> Include actual times
+          </label>
+          <label>
+            <input id="exportExcelIncludeMissed" type="checkbox" checked> Include missed flag
+          </label>
+        </div>
+        <div class="panel" style="max-height:360px; overflow:auto; margin:6px 0 0 0;">
+          <table id="exportExcelPreviewTable" style="width:max-content; min-width:100%; table-layout:auto; border-collapse:collapse;"></table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="exportExcelConfirm">Export Excel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="exportKmzModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:900px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Export to KMZ</h3>
+        <button id="exportKmzClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <div class="kmz-toolbar">
+          <label>
+            Marker icon (apply to all)
+            <select id="exportKmzSymbolAll"></select>
+          </label>
+          <button id="exportKmzApplySymbol" class="secondary small">Apply</button>
+          <button id="exportKmzToggleDesc" class="secondary small">Hide descriptions</button>
+          <label>
+            <input id="exportKmzIncludeLine" type="checkbox" checked>
+            Draw line between selected markers
+          </label>
+          <span class="hint">Only markers with coordinates are exported.</span>
+        </div>
+        <div class="select-table">
+          <table id="exportKmzTable" class="kmz-table"></table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="exportKmzConfirm">Export KMZ</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="markerImportModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:720px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Import markers</h3>
+        <button id="markerImportClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <div class="row" style="gap:8px; margin:0 0 4px 0;">
+          <button id="markerImportChoose">Choose Excel/CSV</button>
+          <button id="markerDownloadSample">Download example file</button>
+        </div>
+        <div class="hint">Excel/CSV: columns Name, Distance (m). Paste: one marker per line, Name and distance separated by tab or spaces.</div>
+        <textarea id="markerPaste" rows="6" placeholder="M1\t500\nM2\t600"></textarea>
+        <div class="row" style="gap:8px; margin-top:4px;">
+          <button id="markerApplyPaste">Apply paste</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="gpsModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">GPS Import</h3>
+        <button id="gpsClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-column">
+          <small>Load KMZ or KML</small>
+          <div class="row" style="margin:4px 0 6px 0; gap:8px;">
+            <button id="gpsLoadFile">Choose file</button>
+            <input type="file" id="gpsFileInput" hidden accept=".kmz,.kml">
+          </div>
+          <div class="hint">Supports KMZ (LineString) or KML with LineString/Point coordinates.</div>
+          <div class="row" style="gap:8px; align-items:flex-end; margin:6px 0;">
+            <label style="color:var(--text); font-size:13px; min-width:200px;">
+              Source EPSG
+              <select id="gpsEpsg" style="min-width:180px;">
+                <option value="EPSG:4326" selected>EPSG:4326 — WGS84 lat/lon</option>
+                <option value="EPSG:3857">EPSG:3857 — Web Mercator (m)</option>
+                <option value="EPSG:28992">EPSG:28992 — Rijksdriehoek (RD)</option>
+                <option value="UTM">UTM (easting/northing)</option>
+              </select>
+            </label>
+            <label id="gpsUtmZoneLabel" style="color:var(--text); font-size:13px; min-width:140px; display:none;">
+              UTM zone
+              <input id="gpsUtmZone" placeholder="31N" style="width:120px;">
+            </label>
+          </div>
+          <button id="gpsSampleXlsx" style="margin:6px 0;">Download example Excel</button>
+          <small style="margin-top:10px; display:block;">Paste coordinates (lat, lon per line)</small>
+          <textarea id="gpsCoordsInput" rows="7" placeholder="52.1, 5.1
+52.2, 5.2"></textarea>
+          <button id="gpsParseText" style="margin-top:6px;">Use pasted coordinates</button>
+        </div>
+
+        <div class="block" style="gap:6px;">
+          <div id="gpsStatus" class="status">No data loaded yet.</div>
+          <div class="mini-row">
+            <button id="gpsSelectAll" class="small">Select all</button>
+            <button id="gpsSelectNone" class="small">Select none</button>
+            <button id="gpsMoveUp" class="small">Move up</button>
+            <button id="gpsMoveDown" class="small">Move down</button>
+          </div>
+          <div class="tables-row">
+            <div class="block">
+              <small style="display:block;">Select and order points</small>
+              <div class="select-table">
+                <table id="gpsSelectTable"></table>
+              </div>
+            </div>
+            <div class="block">
+              <small style="display:block;">Preview distances</small>
+              <div class="preview-table">
+                <table id="gpsPreview"></table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="gpsApply">Use for markers</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gpsCsvModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:900px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">CSV Import (Geomeet)</h3>
+        <button id="gpsCsvClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <div class="row" style="gap:10px; align-items:flex-end; margin:0;">
+          <label>
+            Marker name column (optional)
+            <select id="gpsCsvName"></select>
+          </label>
+          <label>
+            Source EPSG
+            <select id="gpsCsvEpsg" style="min-width:180px;">
+              <option value="EPSG:4326" selected>EPSG:4326 — WGS84 lat/lon</option>
+              <option value="EPSG:3857">EPSG:3857 — Web Mercator (m)</option>
+              <option value="EPSG:28992">EPSG:28992 — Rijksdriehoek (RD)</option>
+              <option value="UTM">UTM (easting/northing)</option>
+            </select>
+          </label>
+          <label id="gpsCsvUtmZoneLabel" style="display:none;">
+            UTM zone
+            <input id="gpsCsvUtmZone" placeholder="31N" style="width:120px;">
+          </label>
+          <label>
+            Latitude column
+            <select id="gpsCsvLat"></select>
+          </label>
+          <label>
+            Longitude column
+            <select id="gpsCsvLon"></select>
+          </label>
+          <label>
+            Height column (optional)
+            <select id="gpsCsvAlt"></select>
+          </label>
+        </div>
+        <div class="panel" style="max-height:360px; overflow:auto; margin:6px 0 0 0;">
+          <table id="gpsCsvPreview" style="width:max-content; min-width:100%; table-layout:auto; border-collapse:collapse;"></table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="gpsCsvApply">Use for markers</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
