@@ -7,6 +7,13 @@
   const themeToggle = document.getElementById('themeToggle');
   const syncIdEl = document.getElementById('syncId');
   const syncEnabledEl = document.getElementById('syncEnabled');
+  const cloudFileNameEl = document.getElementById('cloudFileName');
+  const cloudFilesListEl = document.getElementById('cloudFilesList');
+  const cloudSaveBtn = document.getElementById('cloudSaveBtn');
+  const cloudLoadBtn = document.getElementById('cloudLoadBtn');
+  const cloudDeleteBtn = document.getElementById('cloudDeleteBtn');
+  const cloudRefreshBtn = document.getElementById('cloudRefreshBtn');
+  const cloudStatusEl = document.getElementById('cloudStatus');
   const userModeToggle = document.getElementById('userModeToggle');
   const speedEl = document.getElementById('speed');
   const flowEl = document.getElementById('flow');
@@ -225,6 +232,12 @@
   let lastRemoteTs = 0;
   let syncTimer = null;
 
+  const cloudNameKey = 'pigging-cloud-file-name';
+
+  const setCloudStatus = (msg) => {
+    if (cloudStatusEl) cloudStatusEl.textContent = msg || '';
+  };
+
   const sanitizeDocId = (raw) => {
     if (!raw) return '';
     return String(raw).trim().replace(/[^a-z0-9-_ ]/gi, '').replace(/\s+/g, '_').slice(0, 64);
@@ -239,6 +252,120 @@
       firestoreDb = firebase.firestore();
     }
     return true;
+  };
+
+  const ensureFirebase = () => {
+    const ready = initFirebase();
+    if (!ready) setCloudStatus('Firebase config missing. Add firebase-config.js values.');
+    return ready;
+  };
+
+  const getCloudDocId = (name) => sanitizeDocId(name || '');
+
+  const loadCloudList = () => {
+    if (!cloudFilesListEl) return;
+    if (!ensureFirebase()) return;
+    setCloudStatus('Loading cloud list...');
+    firestoreDb.collection('markerfiles').orderBy('updatedAt', 'desc').limit(200).get()
+      .then((snap) => {
+        const options = [];
+        snap.forEach((doc) => {
+          const data = doc.data() || {};
+          const updatedAt = data.updatedAt ? new Date(data.updatedAt) : null;
+          const labelDate = updatedAt ? updatedAt.toLocaleString() : 'unknown';
+          const name = data.name || doc.id;
+          options.push({ id: doc.id, name, label: `${name} — ${labelDate}` });
+        });
+        cloudFilesListEl.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = options.length ? 'Select a cloud file' : 'No cloud files yet';
+        cloudFilesListEl.appendChild(placeholder);
+        options.forEach((opt) => {
+          const el = document.createElement('option');
+          el.value = opt.id;
+          el.textContent = opt.label;
+          el.dataset.name = opt.name;
+          cloudFilesListEl.appendChild(el);
+        });
+        setCloudStatus(`Loaded ${options.length} cloud file${options.length === 1 ? '' : 's'}.`);
+      })
+      .catch(() => setCloudStatus('Failed to load cloud list.'));
+  };
+
+  const getCloudNameInput = () => (cloudFileNameEl ? cloudFileNameEl.value.trim() : '');
+
+  const saveCloudFile = () => {
+    if (!ensureFirebase()) return;
+    const name = getCloudNameInput() || state.project || '';
+    const docId = getCloudDocId(name);
+    if (!docId) {
+      setCloudStatus('Enter a cloud file name.');
+      return;
+    }
+    if (cloudFileNameEl) cloudFileNameEl.value = name;
+    localStorage.setItem(cloudNameKey, name);
+    setCloudStatus('Saving to cloud...');
+    firestoreDb.collection('markerfiles').doc(docId).set({
+      name,
+      state,
+      updatedAt: Date.now(),
+      clientId
+    }, { merge: true })
+      .then(() => {
+        setCloudStatus('Saved to cloud.');
+        loadCloudList();
+        if (cloudFilesListEl) cloudFilesListEl.value = docId;
+      })
+      .catch(() => setCloudStatus('Failed to save cloud file.'));
+  };
+
+  const loadCloudFile = () => {
+    if (!ensureFirebase()) return;
+    const docId = (cloudFilesListEl && cloudFilesListEl.value) || getCloudDocId(getCloudNameInput());
+    if (!docId) {
+      setCloudStatus('Select or enter a cloud file name.');
+      return;
+    }
+    setCloudStatus('Loading from cloud...');
+    firestoreDb.collection('markerfiles').doc(docId).get()
+      .then((doc) => {
+        if (!doc.exists) {
+          setCloudStatus('Cloud file not found.');
+          return;
+        }
+        const data = doc.data() || {};
+        if (!data.state) {
+          setCloudStatus('Cloud file is empty.');
+          return;
+        }
+        state = data.state;
+        normalizeState();
+        render();
+        saveLocal();
+        if (cloudFileNameEl) cloudFileNameEl.value = data.name || docId;
+        localStorage.setItem(cloudNameKey, data.name || docId);
+        setCloudStatus('Loaded from cloud.');
+      })
+      .catch(() => setCloudStatus('Failed to load cloud file.'));
+  };
+
+  const deleteCloudFile = () => {
+    if (!ensureFirebase()) return;
+    const docId = cloudFilesListEl ? cloudFilesListEl.value : '';
+    if (!docId) {
+      setCloudStatus('Select a cloud file to delete.');
+      return;
+    }
+    if (!window.confirm('Delete this cloud file?')) return;
+    setCloudStatus('Deleting cloud file...');
+    firestoreDb.collection('markerfiles').doc(docId).delete()
+      .then(() => {
+        setCloudStatus('Cloud file deleted.');
+        if (cloudFilesListEl) cloudFilesListEl.value = '';
+        loadCloudList();
+      })
+      .catch(() => setCloudStatus('Failed to delete cloud file.'));
   };
 
   const stopSync = () => {
@@ -1097,6 +1224,12 @@
     if (pipeIdEl) pipeIdEl.disabled = editLocked;
     if (syncIdEl) syncIdEl.disabled = editLocked;
     if (syncEnabledEl) syncEnabledEl.disabled = editLocked;
+    if (cloudFileNameEl) cloudFileNameEl.disabled = editLocked;
+    if (cloudFilesListEl) cloudFilesListEl.disabled = editLocked;
+    if (cloudSaveBtn) cloudSaveBtn.disabled = editLocked;
+    if (cloudLoadBtn) cloudLoadBtn.disabled = editLocked;
+    if (cloudDeleteBtn) cloudDeleteBtn.disabled = editLocked;
+    if (cloudRefreshBtn) cloudRefreshBtn.disabled = editLocked;
     if (themeToggle) themeToggle.checked = state.theme === 'dark';
     document.body.dataset.theme = state.theme;
     if (importXlsxBtn) importXlsxBtn.disabled = operatorMode;
@@ -3303,6 +3436,20 @@
     if (state.syncEnabled) startSync();
     else stopSync();
   };
+  if (cloudFileNameEl) cloudFileNameEl.oninput = () => {
+    localStorage.setItem(cloudNameKey, cloudFileNameEl.value.trim());
+  };
+  if (cloudFilesListEl) cloudFilesListEl.onchange = () => {
+    const selectedOption = cloudFilesListEl.options[cloudFilesListEl.selectedIndex];
+    if (selectedOption && cloudFileNameEl) {
+      cloudFileNameEl.value = selectedOption.dataset.name || selectedOption.value || '';
+      localStorage.setItem(cloudNameKey, cloudFileNameEl.value.trim());
+    }
+  };
+  if (cloudSaveBtn) cloudSaveBtn.onclick = saveCloudFile;
+  if (cloudLoadBtn) cloudLoadBtn.onclick = loadCloudFile;
+  if (cloudDeleteBtn) cloudDeleteBtn.onclick = deleteCloudFile;
+  if (cloudRefreshBtn) cloudRefreshBtn.onclick = loadCloudList;
   speedEl.oninput = () => { state.speed = speedEl.value; render(); };
   flowEl.oninput = () => { state.flow = flowEl.value; render(); };
   flowOffsetEl.oninput = () => {
@@ -3428,7 +3575,10 @@
   };
 
   normalizeState();
+  const cachedCloudName = localStorage.getItem(cloudNameKey);
+  if (cloudFileNameEl && cachedCloudName) cloudFileNameEl.value = cachedCloudName;
   render();
   if (state.syncEnabled) startSync();
+  loadCloudList();
   registerSW();
 })();

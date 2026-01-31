@@ -149,6 +149,22 @@
             <input id="syncEnabled" type="checkbox">
             Realtime sync (Firebase)
           </label>
+          <div style="margin-top:6px; font-size:12px; color:var(--muted);">Cloud files</div>
+          <label>
+            Cloud file name
+            <input id="cloudFileName" placeholder="project-jan-31">
+          </label>
+          <label>
+            Cloud files list
+            <select id="cloudFilesList" style="min-width:200px;"></select>
+          </label>
+          <div class="mini-row" style="margin-top:4px;">
+            <button id="cloudSaveBtn" class="secondary small">Save to cloud</button>
+            <button id="cloudLoadBtn" class="secondary small">Load from cloud</button>
+            <button id="cloudDeleteBtn" class="secondary small">Delete</button>
+            <button id="cloudRefreshBtn" class="secondary small">Refresh list</button>
+          </div>
+          <div id="cloudStatus" class="hint" style="margin-top:4px;">Cloud list not loaded.</div>
         </div>
         <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
           <label>
