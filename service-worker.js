@@ -1,9 +1,10 @@
-const CACHE_NAME = 'pigging-pwa-v2.01.3';
+const CACHE_NAME = 'pigging-pwa-v2.01.4';
 const ASSETS = [
   './',
   './index.html',
   './app.js',
   './manifest.webmanifest',
+  './firebase-config.js',
   './assets/world-map.png'
 ];
 

@@ -5,6 +5,8 @@
   const clientEl = document.getElementById('client');
   const pipeIdEl = document.getElementById('pipeId');
   const themeToggle = document.getElementById('themeToggle');
+  const syncIdEl = document.getElementById('syncId');
+  const syncEnabledEl = document.getElementById('syncEnabled');
   const userModeToggle = document.getElementById('userModeToggle');
   const speedEl = document.getElementById('speed');
   const flowEl = document.getElementById('flow');
@@ -138,6 +140,8 @@
     showNavigate: true,
     exportName: '',
     theme: 'dark',
+    syncId: '',
+    syncEnabled: false,
     pts: [
       { n: 'Launcher', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
       { n: 'M1', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
@@ -148,7 +152,10 @@
 
   let state = defaultState();
 
-  const saveLocal = () => localStorage.setItem('pigging-state', JSON.stringify(state));
+  const saveLocal = () => {
+    localStorage.setItem('pigging-state', JSON.stringify(state));
+    scheduleSyncSave();
+  };
 
   const normalizeState = () => {
     if (!state) return;
@@ -161,6 +168,8 @@
     state.showNavigate = state.showNavigate !== false;
     state.exportName = state.exportName || '';
     state.theme = state.theme === 'light' ? 'light' : 'dark';
+    state.syncId = state.syncId || '';
+    state.syncEnabled = !!state.syncEnabled;
     state.pipeSize = state.pipeSize ?? '';
     state.pipeWt = state.pipeWt ?? '';
     state.pipeWtAuto = state.pipeWtAuto !== false;
@@ -199,6 +208,86 @@
     const mm = String(base.getMonth() + 1).padStart(2, '0');
     const dd = String(base.getDate()).padStart(2, '0');
     return `${dd}/${mm}/${yyyy}`;
+  };
+
+  const clientId = (() => {
+    const key = 'pigging-client-id';
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random());
+    localStorage.setItem(key, id);
+    return id;
+  })();
+
+  let firestoreDb = null;
+  let syncUnsub = null;
+  let isApplyingRemote = false;
+  let lastRemoteTs = 0;
+  let syncTimer = null;
+
+  const sanitizeDocId = (raw) => {
+    if (!raw) return '';
+    return String(raw).trim().replace(/[^a-z0-9-_ ]/gi, '').replace(/\s+/g, '_').slice(0, 64);
+  };
+
+  const getSyncDocId = () => sanitizeDocId(state.syncId || state.project || '');
+
+  const initFirebase = () => {
+    if (!window.firebase || !window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.projectId) return false;
+    if (!firestoreDb) {
+      firebase.initializeApp(window.FIREBASE_CONFIG);
+      firestoreDb = firebase.firestore();
+    }
+    return true;
+  };
+
+  const stopSync = () => {
+    if (syncUnsub) syncUnsub();
+    syncUnsub = null;
+  };
+
+  const startSync = () => {
+    if (!state.syncEnabled) return;
+    if (!initFirebase()) {
+      if (statusEl) statusEl.textContent = 'Firebase config missing. Add firebase-config.js values.';
+      return;
+    }
+    const docId = getSyncDocId();
+    if (!docId) {
+      if (statusEl) statusEl.textContent = 'Enter a Sync ID to enable realtime updates.';
+      return;
+    }
+    stopSync();
+    const ref = firestoreDb.collection('markerlists').doc(docId);
+    syncUnsub = ref.onSnapshot((snap) => {
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      if (data.clientId === clientId) return;
+      const ts = Number(data.updatedAt || 0);
+      if (ts && ts <= lastRemoteTs) return;
+      if (!data.state) return;
+      isApplyingRemote = true;
+      state = data.state;
+      normalizeState();
+      render();
+      lastRemoteTs = ts || Date.now();
+      isApplyingRemote = false;
+    });
+  };
+
+  const scheduleSyncSave = () => {
+    if (!state.syncEnabled || !firestoreDb || isApplyingRemote) return;
+    const docId = getSyncDocId();
+    if (!docId) return;
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => {
+      const ref = firestoreDb.collection('markerlists').doc(docId);
+      ref.set({
+        state,
+        updatedAt: Date.now(),
+        clientId
+      }, { merge: true }).catch(() => {});
+    }, 600);
   };
 
   const haversineMeters = (lat1, lon1, lat2, lon2) => {
@@ -939,6 +1028,8 @@
     projectEl.value = state.project;
     if (clientEl) clientEl.value = state.client || '';
     if (pipeIdEl) pipeIdEl.value = state.pipeId || '';
+    if (syncIdEl) syncIdEl.value = state.syncId || '';
+    if (syncEnabledEl) syncEnabledEl.checked = !!state.syncEnabled;
     if (userModeToggle) userModeToggle.checked = !operatorMode;
     if (modeSelectEl) modeSelectEl.value = state.mode || 'manual';
     speedEl.value = state.speed;
@@ -1004,6 +1095,8 @@
     if (projectEl) projectEl.disabled = editLocked;
     if (clientEl) clientEl.disabled = editLocked;
     if (pipeIdEl) pipeIdEl.disabled = editLocked;
+    if (syncIdEl) syncIdEl.disabled = editLocked;
+    if (syncEnabledEl) syncEnabledEl.disabled = editLocked;
     if (themeToggle) themeToggle.checked = state.theme === 'dark';
     document.body.dataset.theme = state.theme;
     if (importXlsxBtn) importXlsxBtn.disabled = operatorMode;
@@ -3199,6 +3292,17 @@
   projectEl.oninput = () => { state.project = projectEl.value; saveLocal(); };
   if (clientEl) clientEl.oninput = () => { state.client = clientEl.value; saveLocal(); };
   if (pipeIdEl) pipeIdEl.oninput = () => { state.pipeId = pipeIdEl.value; saveLocal(); };
+  if (syncIdEl) syncIdEl.oninput = () => {
+    state.syncId = syncIdEl.value;
+    saveLocal();
+    if (state.syncEnabled) startSync();
+  };
+  if (syncEnabledEl) syncEnabledEl.onchange = () => {
+    state.syncEnabled = !!syncEnabledEl.checked;
+    saveLocal();
+    if (state.syncEnabled) startSync();
+    else stopSync();
+  };
   speedEl.oninput = () => { state.speed = speedEl.value; render(); };
   flowEl.oninput = () => { state.flow = flowEl.value; render(); };
   flowOffsetEl.oninput = () => {
@@ -3325,5 +3429,6 @@
 
   normalizeState();
   render();
+  if (state.syncEnabled) startSync();
   registerSW();
 })();

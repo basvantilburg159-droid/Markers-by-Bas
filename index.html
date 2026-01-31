@@ -141,6 +141,14 @@
             Pipe ID
             <input id="pipeId" value="">
           </label>
+          <label>
+            Sync ID
+            <input id="syncId" placeholder="team-run-01">
+          </label>
+          <label style="flex-direction:row; align-items:center; gap:8px;">
+            <input id="syncEnabled" type="checkbox">
+            Realtime sync (Firebase)
+          </label>
         </div>
         <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
           <label>
@@ -559,6 +567,9 @@
     </div>
   </div>
 
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
