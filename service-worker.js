@@ -1,9 +1,10 @@
-const CACHE_NAME = 'pigging-pwa-v1';
+const CACHE_NAME = 'pigging-pwa-v2.01.3';
 const ASSETS = [
   './',
   './index.html',
   './app.js',
-  './manifest.webmanifest'
+  './manifest.webmanifest',
+  './assets/world-map.png'
 ];
 
 self.addEventListener('install', (event) => {

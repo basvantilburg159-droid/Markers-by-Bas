@@ -4,6 +4,7 @@
   const projectEl = document.getElementById('project');
   const clientEl = document.getElementById('client');
   const pipeIdEl = document.getElementById('pipeId');
+  const themeToggle = document.getElementById('themeToggle');
   const userModeToggle = document.getElementById('userModeToggle');
   const speedEl = document.getElementById('speed');
   const flowEl = document.getElementById('flow');
@@ -42,6 +43,7 @@
   const exportExcelConfirm = document.getElementById('exportExcelConfirm');
   const exportExcelPreviewTable = document.getElementById('exportExcelPreviewTable');
   const exportExcelModalContent = exportExcelModal ? exportExcelModal.querySelector('.modal-content') : null;
+  const exportExcelName = document.getElementById('exportExcelName');
   const exportExcelIncludeCoords = document.getElementById('exportExcelIncludeCoords');
   const exportExcelIncludeDates = document.getElementById('exportExcelIncludeDates');
   const exportExcelIncludeExpTimes = document.getElementById('exportExcelIncludeExpTimes');
@@ -64,6 +66,7 @@
   const exportPreviewClose = document.getElementById('exportPreviewClose');
   const exportPreviewConfirm = document.getElementById('exportPreviewConfirm');
   const exportPreviewTable = document.getElementById('exportPreviewTable');
+  const exportPdfName = document.getElementById('exportPdfName');
   const exportIncludeCoords = document.getElementById('exportIncludeCoords');
   const exportIncludeDates = document.getElementById('exportIncludeDates');
   const exportIncludeExpTimes = document.getElementById('exportIncludeExpTimes');
@@ -88,6 +91,16 @@
   const gpsCsvLon = document.getElementById('gpsCsvLon');
   const gpsCsvAlt = document.getElementById('gpsCsvAlt');
   const gpsCsvPreview = document.getElementById('gpsCsvPreview');
+  const gpsUtmZonePick = document.getElementById('gpsUtmZonePick');
+  const gpsCsvUtmZonePick = document.getElementById('gpsCsvUtmZonePick');
+  const toggleNavBtn = document.getElementById('toggleNavBtn');
+  const utmPickerModal = document.getElementById('utmPickerModal');
+  const utmPickerClose = document.getElementById('utmPickerClose');
+  const utmPickerApply = document.getElementById('utmPickerApply');
+  const utmCountrySelect = document.getElementById('utmCountrySelect');
+  const utmCountryReadout = document.getElementById('utmCountryReadout');
+  const utmMap = document.getElementById('utmMap');
+  const utmMapReadout = document.getElementById('utmMapReadout');
   const gpsCoordsInput = document.getElementById('gpsCoordsInput');
   const gpsParseText = document.getElementById('gpsParseText');
   const gpsStatus = document.getElementById('gpsStatus');
@@ -122,6 +135,9 @@
     launch: '08:30:00',
     showCoords: false,
     displayEpsg: 'EPSG:4326',
+    showNavigate: true,
+    exportName: '',
+    theme: 'dark',
     pts: [
       { n: 'Launcher', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
       { n: 'M1', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
@@ -132,18 +148,7 @@
 
   let state = defaultState();
 
-  let renderTimer = null;
-  const scheduleRender = (delay = 0) => {
-    if (renderTimer) clearTimeout(renderTimer);
-    renderTimer = setTimeout(() => {
-      render();
-      renderTimer = null;
-    }, delay);
-  };
-
   const saveLocal = () => localStorage.setItem('pigging-state', JSON.stringify(state));
-  // Start fresh each load; projects are brought in via JSON import.
-  const loadLocal = () => {};
 
   const normalizeState = () => {
     if (!state) return;
@@ -153,6 +158,9 @@
     state.client = state.client || '';
     state.pipeId = state.pipeId || '';
     state.userMode = state.userMode === 'operator' ? 'operator' : 'expert';
+    state.showNavigate = state.showNavigate !== false;
+    state.exportName = state.exportName || '';
+    state.theme = state.theme === 'light' ? 'light' : 'dark';
     state.pipeSize = state.pipeSize ?? '';
     state.pipeWt = state.pipeWt ?? '';
     state.pipeWtAuto = state.pipeWtAuto !== false;
@@ -190,7 +198,7 @@
     const yyyy = base.getFullYear();
     const mm = String(base.getMonth() + 1).padStart(2, '0');
     const dd = String(base.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+    return `${dd}/${mm}/${yyyy}`;
   };
 
   const haversineMeters = (lat1, lon1, lat2, lon2) => {
@@ -317,10 +325,9 @@
 
     const lat = fp - Q1 * D ** 2 + Q2 * D ** 4 - Q3 * D ** 6;
 
-    const Q4 = 1 / (cosFp * N1 * k0);
-    const Q5 = (1 + 2 * T1 + C1) / (6 * cosFp * N1 ** 3 * k0 ** 3);
-    const Q6 = (5 - 2 * C1 + 28 * T1 - 3 * C1 ** 2 + 8 * ePrime2 + 24 * T1 ** 2) / (120 * cosFp * N1 ** 5 * k0 ** 5);
-    const lon = lon0 + Q4 * D - Q5 * D ** 3 + Q6 * D ** 5;
+    const lon = lon0 +
+      (D - (1 + 2 * T1 + C1) * D ** 3 / 6 + (5 - 2 * C1 + 28 * T1 - 3 * C1 ** 2 + 8 * ePrime2 + 24 * T1 ** 2) * D ** 5 / 120) /
+      cosFp;
 
     return { lat: (lat * 180) / Math.PI, lon: (lon * 180) / Math.PI };
   };
@@ -476,11 +483,81 @@
     return { zone, hemi };
   };
 
+  const zoneFromLonLat = (lon, lat) => {
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+    let zone = Math.floor((lon + 180) / 6) + 1;
+    zone = Math.max(1, Math.min(60, zone));
+    const hemi = lat >= 0 ? 'N' : 'S';
+    return { zone, hemi };
+  };
+
+  const formatZone = (zoneObj) => zoneObj ? `${zoneObj.zone}${zoneObj.hemi}` : '';
+
+  const UTM_COUNTRIES = [
+    { name: 'Netherlands', lon: 5.29, lat: 52.13 },
+    { name: 'Belgium', lon: 4.35, lat: 50.85 },
+    { name: 'Luxembourg', lon: 6.13, lat: 49.61 },
+    { name: 'Germany', lon: 10.45, lat: 51.16 },
+    { name: 'France', lon: 2.21, lat: 46.23 },
+    { name: 'United Kingdom', lon: -1.50, lat: 52.35 },
+    { name: 'Ireland', lon: -8.0, lat: 53.3 },
+    { name: 'Spain', lon: -3.7, lat: 40.4 },
+    { name: 'Portugal', lon: -8.0, lat: 39.4 },
+    { name: 'Italy', lon: 12.5, lat: 42.8 },
+    { name: 'Switzerland', lon: 8.2, lat: 46.8 },
+    { name: 'Austria', lon: 14.3, lat: 47.5 },
+    { name: 'Denmark', lon: 10.0, lat: 56.0 },
+    { name: 'Norway', lon: 8.5, lat: 61.0 },
+    { name: 'Sweden', lon: 15.0, lat: 62.0 },
+    { name: 'Finland', lon: 26.0, lat: 64.0 },
+    { name: 'Poland', lon: 19.1, lat: 52.1 },
+    { name: 'Czechia', lon: 15.5, lat: 49.8 },
+    { name: 'United States (contiguous)', lon: -98.5, lat: 39.8 },
+    { name: 'Canada', lon: -106.3, lat: 56.1 },
+    { name: 'Mexico', lon: -102.5, lat: 23.6 },
+    { name: 'Brazil', lon: -51.9, lat: -10.8 },
+    { name: 'Argentina', lon: -64.0, lat: -34.6 },
+    { name: 'Chile', lon: -71.0, lat: -35.7 },
+    { name: 'Australia', lon: 134.5, lat: -25.5 },
+    { name: 'New Zealand', lon: 172.0, lat: -41.0 },
+    { name: 'South Africa', lon: 24.0, lat: -29.0 },
+    { name: 'Egypt', lon: 30.0, lat: 26.8 },
+    { name: 'Saudi Arabia', lon: 45.0, lat: 24.0 },
+    { name: 'United Arab Emirates', lon: 54.3, lat: 24.4 },
+    { name: 'India', lon: 78.9, lat: 22.6 },
+    { name: 'China', lon: 104.2, lat: 35.9 },
+    { name: 'Japan', lon: 138.0, lat: 36.2 },
+    { name: 'Indonesia', lon: 113.9, lat: -0.8 }
+  ];
+
+  let utmPickerTarget = null;
+  let utmPickerZone = null;
+
+  const openUtmPicker = (targetInput) => {
+    utmPickerTarget = targetInput || null;
+    utmPickerZone = null;
+    if (utmCountrySelect) {
+      const opts = UTM_COUNTRIES.map((c, i) => `<option value="${i}">${c.name}</option>`).join('');
+      utmCountrySelect.innerHTML = `<option value="">Select country…</option>${opts}`;
+    }
+    if (utmCountryReadout) utmCountryReadout.textContent = 'Select a country to set zone.';
+    if (utmMapReadout) utmMapReadout.textContent = 'Lon: —, Lat: —, Zone: —';
+    if (utmPickerModal) utmPickerModal.classList.add('show');
+  };
+
+  const closeUtmPicker = () => {
+    if (utmPickerModal) utmPickerModal.classList.remove('show');
+  };
+
   const convertImportCoords = (coords, epsgCode = 'EPSG:4326', opts = {}) => {
     const list = [];
     const code = (epsgCode || 'EPSG:4326').toUpperCase();
     const utmHint = opts.utmZoneHint ? parseUtmZoneString(opts.utmZoneHint) : null;
-    const zoneFromText = (txt) => parseUtmZoneString(txt || '');
+    const zoneFromText = (txt) => {
+      const raw = String(txt || '').trim();
+      if (!/[A-Za-z]/.test(raw)) return null;
+      return parseUtmZoneString(raw);
+    };
 
     const invMercator = (x, y) => {
       const R = 6378137;
@@ -508,7 +585,7 @@
         out = { lat: geo.lat, lon: geo.lon, alt, name };
       } else if (code === 'UTM') {
         const zoneInfo = p.zoneHint ? parseUtmZoneString(p.zoneHint) : null;
-        const zone = zoneInfo || zoneFromText(name) || utmHint;
+        const zone = zoneInfo || utmHint || zoneFromText(name);
         if (!zone) throw new Error('Provide UTM zone (e.g., 31N) to convert UTM coordinates.');
         const geo = utmToLatLon(p.lon, p.lat, zone.zone, zone.hemi || 'N');
         if (!geo) throw new Error('Could not convert UTM coordinate to lat/lon.');
@@ -706,12 +783,15 @@
 
   const parseUtmCsvValue = (raw) => {
     if (raw == null) return null;
-    const cleaned = String(raw).replace(/[^0-9]/g, '');
-    if (!cleaned) return null;
-    if (cleaned.length <= 2) return Number(cleaned);
-    const intPart = cleaned.slice(0, -2);
-    const fracPart = cleaned.slice(-2);
-    const num = Number(`${intPart}.${fracPart}`);
+    const s = String(raw).trim();
+    if (!s) return null;
+    if (/[.,]/.test(s)) {
+      const num = parseCoordText(s);
+      return Number.isFinite(num) ? num : null;
+    }
+    const cleaned = s.replace(/[^0-9-]/g, '');
+    if (!cleaned || cleaned === '-') return null;
+    const num = Number(cleaned);
     return Number.isFinite(num) ? num : null;
   };
 
@@ -805,7 +885,7 @@
     if (!Number.isFinite(idMm) || idMm <= 0) return null;
     const idM = idMm / 1000;
     const area = Math.PI * (idM / 2) ** 2;
-    return area * 1000; // m3 per km
+    return area * 1000; // m³ per km
   };
 
   const getEffectiveVolume = () => {
@@ -906,7 +986,7 @@
       if (speedRow) speedRow.style.display = '';
       if (flowRow) flowRow.style.display = 'none';
       if (flowOffsetRow) flowOffsetRow.style.display = 'none';
-      if (volRow) volRow.style.display = 'none';
+      if (volRow) volRow.style.display = '';
       if (pipeSizeRow) pipeSizeRow.style.display = 'none';
       if (pipeWtRow) pipeWtRow.style.display = 'none';
       speedEl.disabled = editLocked;
@@ -924,6 +1004,8 @@
     if (projectEl) projectEl.disabled = editLocked;
     if (clientEl) clientEl.disabled = editLocked;
     if (pipeIdEl) pipeIdEl.disabled = editLocked;
+    if (themeToggle) themeToggle.checked = state.theme === 'dark';
+    document.body.dataset.theme = state.theme;
     if (importXlsxBtn) importXlsxBtn.disabled = operatorMode;
     if (gpsBtn) gpsBtn.disabled = operatorMode;
     if (gpsCsvBtn) gpsCsvBtn.disabled = operatorMode;
@@ -941,6 +1023,7 @@
     const displayEpsg = state.displayEpsg || 'EPSG:4326';
     if (displayEpsgSelect) displayEpsgSelect.value = displayEpsg;
     if (displayCoordsBtn) displayCoordsBtn.textContent = state.showCoords ? 'Hide coordinates' : 'Show coordinates';
+    if (toggleNavBtn) toggleNavBtn.textContent = state.showNavigate ? 'Google Maps on' : 'Google Maps off';
 
     const coordMeta = (() => {
       const code = displayEpsg.toUpperCase();
@@ -985,9 +1068,10 @@
         <th>Distance between markers (m)</th>
         <th>Total (m)</th>
         ${coordHeader}
+        <th>Expected volume (m³)</th>
         <th>Expected time</th>
-        <th>Expected volume (m3)</th>
         <th>Actual passing (hh:mm:ss)</th>
+        ${state.showNavigate ? '<th>Google Maps</th>' : ''}
         <th></th>
       </tr>`;
 
@@ -1000,17 +1084,20 @@
       const coordCells = state.showCoords ? coordMeta.build(p, displayEpsg) : [];
 
       const row = table.insertRow();
+      const hasCoords = Number.isFinite(p.lat) && Number.isFinite(p.lon);
+      const navUrl = hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}` : '';
       row.innerHTML = `
         <td><input value="${p.n}" ${editLocked ? 'disabled' : ''} data-name="${i}"></td>
         <td></td>
         <td>${total}</td>
         ${coordCells.map((c) => `<td>${c ?? ''}</td>`).join('')}
-        <td><span data-exp-time="${i}">${ref && v ? toTime(ref) : ''}</span> <span class="hint" data-exp-date="${i}">${ref && v ? formatDateFromSeconds(ref, state.launchDate) : ''}</span></td>
         <td><span data-exp-vol="${i}">${expVol}</span></td>
+        <td><span data-exp-time="${i}">${ref && v ? toTime(ref) : ''}</span> <span class="hint" data-exp-date="${i}">${ref && v ? formatDateFromSeconds(ref, state.launchDate) : ''}</span></td>
         <td>
           ${p.missed && i > 0 && i < state.pts.length - 1 ? `<span class="missed">Not detected</span>` : `<input type="time" step="1" value="${p.t}" data-time="${i}">`}
           ${i > 0 && i < state.pts.length - 1 ? `<button class="small secondary" data-missed="${i}">Not detected</button>` : ''}
         </td>
+        ${state.showNavigate ? `<td>${hasCoords ? `<a class="small secondary" href="${navUrl}" target="_blank" rel="noopener">Open</a>` : ''}</td>` : ''}
           <td>${i > 0 && i < state.pts.length - 1 ? `<button class="small" data-del="${i}" aria-label="Remove" ${editLocked ? 'disabled' : ''}>🗑</button>` : ''}</td>`;
 
       if (p.t && !p.missed) ref = toSec(p.t);
@@ -1018,7 +1105,7 @@
       if (i < state.pts.length - 1) {
         const seg = table.insertRow();
         const coordCount = state.showCoords ? coordMeta.headers.length : 0;
-        const remainingCols = coordCount + 5;
+        const remainingCols = coordCount + (state.showNavigate ? 6 : 5);
         seg.innerHTML = `
           <td>to ${state.pts[i + 1].n}</td>
           <td><input value="${p.d}" ${editLocked ? 'disabled' : ''} data-dist="${i}"></td>
@@ -1357,8 +1444,8 @@
 
         new Chart(document.getElementById('chartVolume'), {
           type:'line',
-          data:{ labels:volDistanceLabels, datasets:[{ label:'Expected volume (m3)', data:volDistanceValues, borderColor:palette[0], backgroundColor:'rgba(246,176,0,0.12)', fill:true }]},
-          options:{plugins:{legend:{display:false}}, scales:{x:{title:{text:'Distance (m)',display:true}}, y:{title:{text:'Volume (m3)',display:true}}}}
+          data:{ labels:volDistanceLabels, datasets:[{ label:'Expected volume (m³)', data:volDistanceValues, borderColor:palette[0], backgroundColor:'rgba(246,176,0,0.12)', fill:true }]},
+          options:{plugins:{legend:{display:false}}, scales:{x:{title:{text:'Distance (m)',display:true}}, y:{title:{text:'Volume (m³)',display:true}}}}
         });
 
         attachZoom();
@@ -1472,12 +1559,33 @@
     return rows;
   };
 
+  const sanitizeExportName = (raw, fallback = 'Markerlist') => {
+    return (raw || fallback)
+      .replace(/[^a-z0-9-_ ]/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/ /g, '_') || fallback;
+  };
+
   const buildExportBaseName = () => {
     const parts = [state.project, state.client, state.pipeId]
       .map((v) => (v || '').trim())
       .filter((v) => v.length > 0);
     const raw = parts.length ? parts.join('_') : 'pigging-run';
-    return raw.replace(/[^a-z0-9-_ ]/gi, '').replace(/\s+/g, ' ').trim().replace(/ /g, '_') || 'pigging-run';
+    return sanitizeExportName(raw, 'pigging-run');
+  };
+
+  const buildMarkerlistName = () => {
+    const parts = [state.project, state.client, state.pipeId]
+      .map((v) => (v || '').trim())
+      .filter((v) => v.length > 0);
+    const raw = parts.length ? `Markerlist_${parts.join('_')}` : 'Markerlist';
+    return sanitizeExportName(raw, 'Markerlist');
+  };
+
+  const getExportName = () => {
+    const raw = state.exportName && state.exportName.trim() ? state.exportName.trim() : buildMarkerlistName();
+    return sanitizeExportName(raw, 'Markerlist');
   };
 
   const kmzSymbols = [
@@ -1751,6 +1859,8 @@
 
   const openExportPreview = () => {
     if (exportPreviewModal) exportPreviewModal.classList.add('show');
+    if (!state.exportName) state.exportName = buildMarkerlistName();
+    if (exportPdfName) exportPdfName.value = getExportName();
     renderExportPreview();
   };
 
@@ -1760,6 +1870,8 @@
 
   const openExportExcelModal = () => {
     if (exportExcelModal) exportExcelModal.classList.add('show');
+    if (!state.exportName) state.exportName = buildMarkerlistName();
+    if (exportExcelName) exportExcelName.value = getExportName();
     renderExcelPreview();
   };
 
@@ -1892,7 +2004,7 @@
       const doc = new jsPDF({ orientation: chosen.orientation, unit: 'mm', format: 'a4' });
       let y = 14;
 
-      const header = `Markers by Bas - ${state.project || ''}`.trim();
+      const header = getExportName();
       doc.setFontSize(14);
       doc.text(header, 10, y);
       y += 8;
@@ -1903,7 +2015,7 @@
       const derived = calcSpeed();
       const effectiveVol = getEffectiveVolume();
       if (state.mode === 'calc') {
-        const calcLine = `Mode: From flow/volume   Flow: ${state.flow || '-'} m3/h   Volume: ${Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-'} m3/km   Offset: ${state.offset || 0}`;
+        const calcLine = `Mode: From flow/volume   Flow: ${state.flow || '-'} m³/h   Volume: ${Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-'} m³/km   Offset: ${state.offset || 0}`;
         const speedLine = derived ? `Calculated speed: ${derived.toFixed(1)} m/h` : '';
         doc.text(calcLine, 10, y);
         y += 6;
@@ -1912,7 +2024,7 @@
           y += 6;
         }
       } else if (state.mode === 'pipe') {
-        const calcLine = `Mode: From pipe specs   Flow: ${state.flow || '-'} m3/h   Pipe: ${state.pipeSize || '-'} in   WT: ${state.pipeWt || '-'} mm   Volume: ${Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-'} m3/km   Offset: ${state.offset || 0}`;
+        const calcLine = `Mode: From pipe specs   Flow: ${state.flow || '-'} m³/h   Pipe: ${state.pipeSize || '-'} in   WT: ${state.pipeWt || '-'} mm   Volume: ${Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-'} m³/km   Offset: ${state.offset || 0}`;
         const speedLine = derived ? `Calculated speed: ${derived.toFixed(1)} m/h` : '';
         doc.text(calcLine, 10, y);
         y += 6;
@@ -1999,7 +2111,7 @@
       });
 
       const blob = doc.output('blob');
-      const name = buildExportBaseName() + '.pdf';
+      const name = getExportName() + '.pdf';
 
       if (window.showSaveFilePicker) {
         try {
@@ -2071,7 +2183,7 @@
     }
     if (includeExpTimes) headerCells.push('<th>Expected time</th>');
     if (includeDates) headerCells.push('<th>Expected date</th>');
-    if (includeExpVol) headerCells.push('<th>Expected vol (m3)</th>');
+    if (includeExpVol) headerCells.push('<th>Expected vol (m³)</th>');
     if (includeActualTimes) headerCells.push('<th>Actual passing time</th>');
     if (includeMissed) headerCells.push('<th>Missed</th>');
 
@@ -2137,22 +2249,22 @@
 
       const effectiveVol = getEffectiveVolume();
 
-      rows.push(['Markers by Bas', state.project || '']);
+      rows.push([getExportName()]);
       rows.push(['Launch', state.launch || '-']);
       if (state.mode === 'calc') {
         rows.push(['Mode', 'From flow/volume']);
-        rows.push(['Flow (m3/h)', state.flow || '-']);
-        rows.push(['Volume (m3/km)', Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-']);
-        rows.push(['Offset (m3/h)', state.offset || 0]);
+        rows.push(['Flow (m³/h)', state.flow || '-']);
+        rows.push(['Volume (m³/km)', Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-']);
+        rows.push(['Offset (m³/h)', state.offset || 0]);
         const derived = calcSpeed();
         if (derived) rows.push(['Calculated speed (m/h)', derived.toFixed(1)]);
       } else if (state.mode === 'pipe') {
         rows.push(['Mode', 'From pipe specs']);
-        rows.push(['Flow (m3/h)', state.flow || '-']);
+        rows.push(['Flow (m³/h)', state.flow || '-']);
         rows.push(['Pipe size (in)', state.pipeSize || '-']);
         rows.push(['WT (mm)', state.pipeWt || '-']);
-        rows.push(['Volume (m3/km)', Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-']);
-        rows.push(['Offset (m3/h)', state.offset || 0]);
+        rows.push(['Volume (m³/km)', Number.isFinite(effectiveVol) ? effectiveVol.toFixed(2) : '-']);
+        rows.push(['Offset (m³/h)', state.offset || 0]);
         const derived = calcSpeed();
         if (derived) rows.push(['Calculated speed (m/h)', derived.toFixed(1)]);
       } else {
@@ -2178,7 +2290,7 @@
       }
       if (includeExpTimes) header.push('Expected time');
       if (includeDates) header.push('Expected date');
-      if (includeExpVol) header.push('Expected vol (m3)');
+      if (includeExpVol) header.push('Expected vol (m³)');
       if (includeActualTimes) header.push('Actual passing time');
       if (includeMissed) header.push('Missed');
       rows.push(header);
@@ -2250,7 +2362,7 @@
 
       const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const name = buildExportBaseName() + '.xlsx';
+      const name = getExportName() + '.xlsx';
 
       if (window.showSaveFilePicker) {
         try {
@@ -2408,7 +2520,7 @@
   };
 
   const saveJSON = async () => {
-    const name = (state.project || 'pigging-run') + '.json';
+    const name = buildExportBaseName() + '.json';
     const data = JSON.stringify(state, null, 2);
     if (window.showSaveFilePicker) {
       try {
@@ -2437,11 +2549,22 @@
   let gpsActiveIndex = null;
   let gpsCsvHeaders = [];
   let gpsCsvRows = [];
+  let gpsSourceEpsg = 'EPSG:4326';
+  let gpsSourceUtmZone = '';
 
   const setGpsStatus = (msg) => { if (gpsStatus) gpsStatus.textContent = msg; };
 
-  const setGpsData = (coords) => {
-    gpsWorking = (coords || []).map((p) => ({ lat: p.lat, lon: p.lon, alt: p.alt ?? null, name: p.name || '', include: true }));
+  const setGpsData = (coords, opts = {}) => {
+    gpsSourceEpsg = (opts.epsg || 'EPSG:4326').toUpperCase();
+    gpsSourceUtmZone = opts.utmZone || '';
+    gpsWorking = (coords || []).map((p) => ({
+      lat: p.lat,
+      lon: p.lon,
+      alt: p.alt ?? null,
+      name: p.name || '',
+      include: true,
+      utm: p.utm ? { east: p.utm.east, north: p.utm.north } : null
+    }));
     gpsActiveIndex = null;
     renderGpsList();
     renderGpsPreview();
@@ -2524,6 +2647,7 @@
 
   const openCsvModal = () => {
     if (!gpsCsvModal) return;
+    if (gpsCsvUtmZone) gpsCsvUtmZone.value = '';
     renderCsvColumns();
     renderCsvPreview();
     gpsCsvModal.classList.add('show');
@@ -2539,7 +2663,56 @@
     const label = document.getElementById('gpsCsvUtmZoneLabel');
     if (label) label.style.display = isUtm ? 'block' : 'none';
     if (!isUtm && gpsCsvUtmZone) gpsCsvUtmZone.value = '';
+    const latLabel = document.getElementById('gpsCsvLatLabel');
+    const lonLabel = document.getElementById('gpsCsvLonLabel');
+    if (latLabel) latLabel.textContent = isUtm ? 'Easting (X) column' : 'Latitude column';
+    if (lonLabel) lonLabel.textContent = isUtm ? 'Northing (Y) column' : 'Longitude column';
   };
+
+  if (utmCountrySelect) {
+    utmCountrySelect.onchange = () => {
+      const idx = utmCountrySelect.value !== '' ? Number(utmCountrySelect.value) : null;
+      if (idx == null || !UTM_COUNTRIES[idx]) return;
+      const c = UTM_COUNTRIES[idx];
+      const zone = zoneFromLonLat(c.lon, c.lat);
+      utmPickerZone = zone;
+      const zoneStr = formatZone(zone);
+      if (utmCountryReadout) utmCountryReadout.textContent = `${c.name} → ${zoneStr}`;
+    };
+  }
+
+  if (utmMap) {
+    utmMap.addEventListener('click', (e) => {
+      const rect = utmMap.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const lon = (x / rect.width) * 360 - 180;
+      const lat = 90 - (y / rect.height) * 180;
+      const zone = zoneFromLonLat(lon, lat);
+      utmPickerZone = zone;
+      if (utmMapReadout) utmMapReadout.textContent = `Lon: ${lon.toFixed(2)}, Lat: ${lat.toFixed(2)}, Zone: ${formatZone(zone)}`;
+      if (utmPickerTarget && utmPickerZone) {
+        utmPickerTarget.value = formatZone(utmPickerZone);
+      }
+    });
+  }
+
+  if (utmPickerApply) {
+    utmPickerApply.onclick = () => {
+      if (!utmPickerTarget) return;
+      if (!utmPickerZone) {
+        if (utmCountryReadout) utmCountryReadout.textContent = 'Pick a country or click on the map first.';
+        return;
+      }
+      utmPickerTarget.value = formatZone(utmPickerZone);
+      closeUtmPicker();
+    };
+  }
+
+  if (utmPickerClose) utmPickerClose.onclick = closeUtmPicker;
+  if (utmPickerModal) bindModalClose(utmPickerModal, closeUtmPicker);
+  if (gpsUtmZonePick && gpsUtmZoneInput) gpsUtmZonePick.onclick = () => openUtmPicker(gpsUtmZoneInput);
+  if (gpsCsvUtmZonePick && gpsCsvUtmZone) gpsCsvUtmZonePick.onclick = () => openUtmPicker(gpsCsvUtmZone);
 
   const renderGpsPreview = () => {
     if (!gpsPreview) return;
@@ -2553,7 +2726,10 @@
     }
     gpsSegments = [];
     let total = 0;
-    gpsPreview.innerHTML = '<tr><th>#</th><th>Name</th><th>Lat</th><th>Lon</th><th>Alt</th><th>Segment (m)</th><th>Cumulative (m)</th></tr>';
+    const isUtmDisplay = gpsSourceEpsg === 'UTM' && gpsSourceUtmZone;
+    const colA = isUtmDisplay ? 'Easting (m)' : 'Lat';
+    const colB = isUtmDisplay ? 'Northing (m)' : 'Lon';
+    gpsPreview.innerHTML = `<tr><th>#</th><th>Name</th><th>${colA}</th><th>${colB}</th><th>Alt</th><th>Segment (m)</th><th>Cumulative (m)</th></tr>`;
     coords.forEach((p, i) => {
       let seg = '';
       if (i > 0) {
@@ -2562,20 +2738,27 @@
         total += d;
         seg = Math.round(d).toLocaleString();
       }
+      const aVal = isUtmDisplay && p.utm ? p.utm.east.toFixed(2) : p.lat.toFixed(6);
+      const bVal = isUtmDisplay && p.utm ? p.utm.north.toFixed(2) : p.lon.toFixed(6);
       const row = gpsPreview.insertRow();
-      row.innerHTML = `<td>${i + 1}</td><td>${p.name || ''}</td><td>${p.lat.toFixed(6)}</td><td>${p.lon.toFixed(6)}</td><td>${p.alt != null ? p.alt : ''}</td><td>${seg}</td><td>${i === 0 ? '' : Math.round(total).toLocaleString()}</td>`;
+      row.innerHTML = `<td>${i + 1}</td><td>${p.name || ''}</td><td>${aVal}</td><td>${bVal}</td><td>${p.alt != null ? p.alt : ''}</td><td>${seg}</td><td>${i === 0 ? '' : Math.round(total).toLocaleString()}</td>`;
     });
     setGpsStatus(`Selected ${coords.length} points · total ${Math.round(total).toLocaleString()} m`);
   };
 
   const renderGpsList = () => {
     if (!gpsSelectTable) return;
-    gpsSelectTable.innerHTML = '<tr><th>#</th><th>Name</th><th>Lat</th><th>Lon</th><th>Alt</th><th>Include</th></tr>';
+    const isUtmDisplay = gpsSourceEpsg === 'UTM' && gpsSourceUtmZone;
+    const colA = isUtmDisplay ? 'Easting (m)' : 'Lat';
+    const colB = isUtmDisplay ? 'Northing (m)' : 'Lon';
+    gpsSelectTable.innerHTML = `<tr><th>#</th><th>Name</th><th>${colA}</th><th>${colB}</th><th>Alt</th><th>Include</th></tr>`;
     gpsWorking.forEach((p, i) => {
       const row = gpsSelectTable.insertRow();
       row.dataset.idx = String(i);
       if (gpsActiveIndex === i) row.classList.add('active');
-      row.innerHTML = `<td>${i + 1}</td><td>${p.name || ''}</td><td>${p.lat.toFixed(6)}</td><td>${p.lon.toFixed(6)}</td><td>${p.alt != null ? p.alt : ''}</td><td><input type="checkbox" data-include="${i}" ${p.include ? 'checked' : ''}></td>`;
+      const aVal = isUtmDisplay && p.utm ? p.utm.east.toFixed(2) : p.lat.toFixed(6);
+      const bVal = isUtmDisplay && p.utm ? p.utm.north.toFixed(2) : p.lon.toFixed(6);
+      row.innerHTML = `<td>${i + 1}</td><td>${p.name || ''}</td><td>${aVal}</td><td>${bVal}</td><td>${p.alt != null ? p.alt : ''}</td><td><input type="checkbox" data-include="${i}" ${p.include ? 'checked' : ''}></td>`;
     });
   };
 
@@ -2647,7 +2830,7 @@
       const utmZoneHint = getGpsImportUtmZone();
       const converted = convertImportCoords(coords, epsg, { utmZoneHint });
       if (!converted.length) throw new Error('No usable coordinates after conversion');
-      setGpsData(converted);
+      setGpsData(converted, { epsg, utmZone: utmZoneHint });
     } catch (err) {
       setGpsStatus('Could not load file.');
       alert(err && err.message ? err.message : 'Failed to load file');
@@ -2666,7 +2849,7 @@
         setGpsStatus('Could not parse pasted coordinates.');
         return;
       }
-      setGpsData(coords);
+      setGpsData(coords, { epsg, utmZone: utmZoneHint });
     } catch (err) {
       setGpsStatus(err && err.message ? err.message : 'Could not parse pasted coordinates.');
     }
@@ -2738,13 +2921,16 @@
     r.readAsText(f);
   };
 
-  if (gpsBtn) gpsBtn.onclick = openGpsModal;
-  if (gpsClose) gpsClose.onclick = closeGpsModal;
-  if (gpsModal) {
-    gpsModal.addEventListener('click', (e) => {
-      if (e.target === gpsModal || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeGpsModal();
+  function bindModalClose(modalEl, closeFn) {
+    if (!modalEl || typeof closeFn !== 'function') return;
+    modalEl.addEventListener('click', (e) => {
+      if (e.target === modalEl || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeFn();
     });
   }
+
+  if (gpsBtn) gpsBtn.onclick = openGpsModal;
+  if (gpsClose) gpsClose.onclick = closeGpsModal;
+  bindModalClose(gpsModal, closeGpsModal);
   if (gpsLoadFile) gpsLoadFile.onclick = () => { if (gpsFileInput) gpsFileInput.click(); };
   if (gpsFileInput) gpsFileInput.onchange = (e) => { const f = e.target.files[0]; handleGpsFile(f); };
   if (gpsParseText) gpsParseText.onclick = handleGpsText;
@@ -2801,15 +2987,13 @@
         updateCsvEpsgUi();
       } catch (err) {
         if (gpsStatus) gpsStatus.textContent = 'Could not read CSV file.';
+      } finally {
+        if (gpsCsvInput) gpsCsvInput.value = '';
       }
     };
   }
   if (gpsCsvClose) gpsCsvClose.onclick = closeCsvModal;
-  if (gpsCsvModal) {
-    gpsCsvModal.addEventListener('click', (e) => {
-      if (e.target === gpsCsvModal || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeCsvModal();
-    });
-  }
+  bindModalClose(gpsCsvModal, closeCsvModal);
   if (gpsCsvEpsg) gpsCsvEpsg.onchange = () => { updateCsvEpsgUi(); renderCsvPreview(); };
   if (gpsCsvLat) gpsCsvLat.onchange = renderCsvPreview;
   if (gpsCsvLon) gpsCsvLon.onchange = renderCsvPreview;
@@ -2819,32 +3003,77 @@
       const latIdx = gpsCsvLat ? Number(gpsCsvLat.value) : NaN;
       const lonIdx = gpsCsvLon ? Number(gpsCsvLon.value) : NaN;
       const altIdx = gpsCsvAlt && gpsCsvAlt.value !== '' ? Number(gpsCsvAlt.value) : null;
-      if (!Number.isInteger(latIdx) || !Number.isInteger(lonIdx)) return;
+      if (!Number.isInteger(latIdx) || !Number.isInteger(lonIdx)) {
+        if (gpsStatus) gpsStatus.textContent = 'Select valid X/Y columns first.';
+        return;
+      }
       const coords = [];
       const epsg = gpsCsvEpsg ? gpsCsvEpsg.value : 'EPSG:4326';
+      const useLatLonCols = false;
+      const latRefIdx = -1;
+      const lonRefIdx = -1;
       if (epsg === 'UTM') {
         const zoneStr = gpsCsvUtmZone ? gpsCsvUtmZone.value : '';
         if (!parseUtmZoneString(zoneStr)) {
-          if (gpsStatus) gpsStatus.textContent = 'Please enter a valid UTM zone (e.g., 30N).';
+          if (gpsStatus) gpsStatus.textContent = 'Please select a UTM zone before applying.';
+          alert('Please select a UTM zone (e.g., 30N) before applying.');
+          if (gpsCsvUtmZone) gpsCsvUtmZone.focus();
           return;
         }
       }
+      const utmZoneHint = epsg === 'UTM' && gpsCsvUtmZone ? gpsCsvUtmZone.value : '';
       gpsCsvRows.forEach((row) => {
-        const lat = epsg === 'UTM'
-          ? parseUtmCsvValue(row[latIdx])
-          : parseCoordText(row[latIdx]);
-        const lon = epsg === 'UTM'
-          ? parseUtmCsvValue(row[lonIdx])
-          : parseCoordText(row[lonIdx]);
+        const rawA = row[latIdx];
+        const rawB = row[lonIdx];
+        const a = epsg === 'UTM' ? parseUtmCsvValue(rawA) : parseCoordText(rawA);
+        const b = epsg === 'UTM' ? parseUtmCsvValue(rawB) : parseCoordText(rawB);
+        let lat = epsg === 'UTM' ? b : a;
+        let lon = epsg === 'UTM' ? a : b;
+        let latLonOverride = null;
+        if (epsg === 'UTM' && useLatLonCols && latRefIdx >= 0 && lonRefIdx >= 0) {
+          const latRef = parseCoordText(row[latRefIdx]);
+          const lonRef = parseCoordText(row[lonRefIdx]);
+          if (Number.isFinite(latRef) && Number.isFinite(lonRef)) {
+            lat = latRef;
+            lon = lonRef;
+            latLonOverride = { lat: latRef, lon: lonRef };
+          }
+        }
         const alt = altIdx != null ? parseCoordText(row[altIdx]) : null;
         const name = nameIdx != null ? String(row[nameIdx] ?? '').trim() : '';
-        if (Number.isFinite(lat) && Number.isFinite(lon)) coords.push({ lat, lon, alt: Number.isFinite(alt) ? alt : null, name });
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          const item = { lat, lon, alt: Number.isFinite(alt) ? alt : null, name, latLonOverride };
+          if (epsg === 'UTM') {
+            item.utm = { east: a, north: b };
+            if (utmZoneHint) item.zoneHint = utmZoneHint;
+          }
+          coords.push(item);
+        }
       });
-      if (!coords.length) return;
+      if (!coords.length) {
+        if (gpsStatus) gpsStatus.textContent = 'No valid coordinates found in selected columns.';
+        return;
+      }
       try {
-        const utmZoneHint = gpsCsvUtmZone ? gpsCsvUtmZone.value : '';
-        const converted = epsg === 'EPSG:4326' ? coords : convertImportCoords(coords, epsg, { utmZoneHint });
-        setGpsData(converted);
+        let converted = [];
+        if (epsg === 'EPSG:4326') {
+          converted = coords;
+        } else if (epsg === 'UTM' && useLatLonCols) {
+          coords.forEach((item) => {
+            if (item.latLonOverride) {
+              converted.push({ lat: item.latLonOverride.lat, lon: item.latLonOverride.lon, alt: item.alt ?? null, name: item.name || '' });
+            } else {
+              const conv = convertImportCoords([item], epsg, { utmZoneHint });
+              if (conv && conv[0]) converted.push(conv[0]);
+            }
+          });
+        } else {
+          converted = convertImportCoords(coords, epsg, { utmZoneHint });
+        }
+        if (epsg === 'UTM') {
+          converted = converted.map((p, i) => ({ ...p, utm: coords[i] && coords[i].utm ? coords[i].utm : null }));
+        }
+        setGpsData(converted, { epsg, utmZone: utmZoneHint });
         if (gpsStatus) gpsStatus.textContent = `Loaded ${coords.length} points from CSV.`;
         openGpsModal();
         closeCsvModal();
@@ -2860,11 +3089,7 @@
   if (importXlsxBtn) importXlsxBtn.onclick = openMarkerImport;
   if (importXlsxInput) importXlsxInput.onchange = (e) => { const f = e.target.files[0]; importMarkersXlsx(f); };
   if (markerImportClose) markerImportClose.onclick = closeMarkerImport;
-  if (markerImportModal) {
-    markerImportModal.addEventListener('click', (e) => {
-      if (e.target === markerImportModal || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeMarkerImport();
-    });
-  }
+  bindModalClose(markerImportModal, closeMarkerImport);
   if (markerImportChoose) markerImportChoose.onclick = () => { if (importXlsxInput) importXlsxInput.click(); };
   if (markerDownloadSample) markerDownloadSample.onclick = downloadMarkerSample;
   if (markerApplyPaste) markerApplyPaste.onclick = () => { if (!isEditLocked()) applyPaste(); };
@@ -2877,21 +3102,21 @@
   exportBtn.onclick = openExportPreview;
   if (exportExcelBtn) exportExcelBtn.onclick = openExportExcelModal;
   if (displayCoordsBtn) displayCoordsBtn.onclick = () => { state.showCoords = !state.showCoords; render(); };
+  if (toggleNavBtn) toggleNavBtn.onclick = () => { state.showNavigate = !state.showNavigate; render(); };
   if (displayEpsgSelect) displayEpsgSelect.onchange = () => { state.displayEpsg = displayEpsgSelect.value || 'EPSG:4326'; render(); };
-  if (displayCoordsBtn) displayCoordsBtn.onclick = () => { state.showCoords = !state.showCoords; render(); };
 
   if (exportPreviewClose) exportPreviewClose.onclick = closeExportPreview;
-  if (exportPreviewModal) {
-    exportPreviewModal.addEventListener('click', (e) => {
-      if (e.target === exportPreviewModal || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeExportPreview();
-    });
-  }
+  bindModalClose(exportPreviewModal, closeExportPreview);
   if (exportPreviewConfirm) exportPreviewConfirm.onclick = () => exportPdf({});
   if (exportIncludeCoords) exportIncludeCoords.onchange = renderExportPreview;
   if (exportIncludeDates) exportIncludeDates.onchange = renderExportPreview;
   if (exportIncludeExpTimes) exportIncludeExpTimes.onchange = renderExportPreview;
   if (exportIncludeActualTimes) exportIncludeActualTimes.onchange = renderExportPreview;
   if (exportEpsgSelect) exportEpsgSelect.onchange = renderExportPreview;
+  if (exportPdfName) exportPdfName.oninput = () => {
+    state.exportName = exportPdfName.value;
+    if (exportExcelName) exportExcelName.value = exportPdfName.value;
+  };
 
   const updateExcelCoordUi = () => {
     const enabled = exportExcelIncludeCoords ? exportExcelIncludeCoords.checked : true;
@@ -2902,22 +3127,19 @@
   };
 
   if (exportExcelClose) exportExcelClose.onclick = closeExportExcelModal;
-  if (exportExcelModal) {
-    exportExcelModal.addEventListener('click', (e) => {
-      if (e.target === exportExcelModal || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeExportExcelModal();
-    });
-  }
+  bindModalClose(exportExcelModal, closeExportExcelModal);
   if (exportExcelConfirm) exportExcelConfirm.onclick = () => {
     exportExcel({});
     closeExportExcelModal();
   };
+  if (exportExcelName) exportExcelName.oninput = () => {
+    state.exportName = exportExcelName.value;
+    if (exportPdfName) exportPdfName.value = exportExcelName.value;
+  };
   if (exportKmzBtn) exportKmzBtn.onclick = openExportKmzModal;
+  if (graphsBtn) graphsBtn.onclick = showGraphs;
   if (exportKmzClose) exportKmzClose.onclick = closeExportKmzModal;
-  if (exportKmzModal) {
-    exportKmzModal.addEventListener('click', (e) => {
-      if (e.target === exportKmzModal || (e.target && e.target.classList && e.target.classList.contains('modal-backdrop'))) closeExportKmzModal();
-    });
-  }
+  bindModalClose(exportKmzModal, closeExportKmzModal);
   if (exportKmzConfirm) exportKmzConfirm.onclick = () => {
     exportKmz();
     closeExportKmzModal();
@@ -3022,6 +3244,13 @@
     };
   }
 
+  if (themeToggle) {
+    themeToggle.onchange = () => {
+      state.theme = themeToggle.checked ? 'dark' : 'light';
+      render();
+    };
+  }
+
   // Update state live, but render only on commit (change or Enter) to avoid disrupting typing.
   table.addEventListener('input', (e) => {
     const t = e.target;
@@ -3083,7 +3312,6 @@
         render();
       }
     }
-      // Removed pass functionality
   });
 
   const registerSW = async () => {

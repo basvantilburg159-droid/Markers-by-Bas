@@ -2,16 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Markers by Bas V2.0</title>
+  <title>Markers by Bas V2.01</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="manifest" href="manifest.webmanifest">
   <style>
     :root { --bg:#0d0d0d; --panel:#151515; --line:#2a2a2a; --text:#e6e6e6; --muted:#aaa; --accent:#f6b000; }
+    body[data-theme="light"] { --bg:#ffffff; --panel:#f7f7f7; --line:#d6d6d6; --text:#111; --muted:#666; --accent:#f6b000; }
+    body[data-theme="light"] input, body[data-theme="light"] textarea, body[data-theme="light"] select { background:#e9e9e9; }
+    body[data-theme="light"] input:disabled, body[data-theme="light"] textarea:disabled, body[data-theme="light"] select:disabled { background:#e0e0e0; }
+    body[data-theme="light"] #displayEpsg { background:#e0e0e0 !important; }
     body { background:var(--bg); color:var(--text); font-family:Segoe UI,Arial,sans-serif; margin:0; padding:16px; }
     h1 { margin:0; color:var(--accent); }
     .header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:0 0 12px; }
     .mode-toggle { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
-    .mode-toggle .mode-caption { color:var(--text); font-weight:600; font-size:12px; }
+    .mode-toggle .mode-caption { color:var(--text); font-weight:600; font-size:12px; width:48px; text-align:left; }
     .switch { position:relative; display:inline-block; width:44px; height:22px; }
     .switch input { opacity:0; width:0; height:0; }
     .slider { position:absolute; cursor:pointer; inset:0; background:#333; border:1px solid var(--line); border-radius:22px; transition:0.2s; }
@@ -44,8 +48,8 @@
     .missed { color:#f55; font-weight:600; margin-right:6px; }
     .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:999; }
     .modal.show { display:flex; }
-    .modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(2px); }
-    .modal-content { position:relative; background:#111; border:1px solid var(--line); border-radius:8px; padding:12px; width:98vw; max-width:1400px; max-height:92vh; overflow:auto; box-shadow:0 12px 32px rgba(0,0,0,0.45); }
+    .modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.6); backdrop-filter:blur(2px); z-index:0; pointer-events:none; }
+    .modal-content { position:relative; z-index:2; background:#111; border:1px solid var(--line); border-radius:8px; padding:12px; width:98vw; max-width:1400px; max-height:92vh; overflow:auto; box-shadow:0 12px 32px rgba(0,0,0,0.45); }
     .modal-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
     .modal-body { display:flex; flex-direction:column; gap:12px; }
     .modal-column { flex:1; min-width:260px; }
@@ -66,6 +70,8 @@
     .export-epsg select { min-width:180px; }
     .input-row { display:flex; align-items:center; gap:8px; }
     .input-row .input-label { min-width:150px; text-align:left; font-size:12px; color:var(--muted); }
+    #speedRow, #volRow { gap:2px; }
+    #speedRow .input-label, #volRow .input-label { min-width:90px; }
     .input-row input { width:70px; }
     .kmz-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
     .kmz-toolbar label { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--text); }
@@ -73,21 +79,49 @@
     .kmz-table th, .kmz-table td { vertical-align:middle; }
     .kmz-icon-preview { width:22px; height:22px; display:inline-block; }
     .kmz-desc-input { width:100%; min-width:200px; }
+    body[data-theme="light"] .modal-content { background:#ffffff; color:#111; }
+    body[data-theme="light"] .modal-backdrop { background:rgba(255,255,255,0.7); }
+    body[data-theme="light"] .panel { background:#f7f7f7; }
+    body[data-theme="light"] .preview-table th,
+    body[data-theme="light"] .preview-table td,
+    body[data-theme="light"] .select-table th,
+    body[data-theme="light"] .select-table td,
+    body[data-theme="light"] table th,
+    body[data-theme="light"] table td { border-color:#d6d6d6; }
+    body[data-theme="light"] th { background:#f0f0f0; color:#b87400; }
+    .utm-picker-body { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
+    .utm-panel { flex:1; min-width:260px; }
+    .utm-map { display:block; width:100%; max-width:640px; height:300px; border:1px solid var(--line); border-radius:6px; background:#0b0b0b; cursor:crosshair; }
+    .utm-map text { fill:#666; font-size:11px; }
+    .utm-readout { font-size:12px; color:var(--muted); }
+    .utm-buttons { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>
-      <span>Markers by Bas</span>
-      <span style="font-size:12px; color:#e6e6e6; opacity:0.8; margin-left:6px;">V2.0</span>
-    </h1>
-    <div class="mode-toggle" aria-label="User mode">
-      <span class="mode-caption">Operator</span>
-      <label class="switch">
-        <input id="userModeToggle" type="checkbox" checked>
-        <span class="slider"></span>
-      </label>
-      <span class="mode-caption">Expert</span>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <h1>
+        <span>Markers by Bas</span>
+        <span style="font-size:12px; color:#e6e6e6; opacity:0.8; margin-left:6px;">V2.01</span>
+      </h1>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <div class="mode-toggle" aria-label="Theme mode">
+          <span class="mode-caption">Light</span>
+          <label class="switch">
+            <input id="themeToggle" type="checkbox">
+            <span class="slider"></span>
+          </label>
+          <span class="mode-caption">Dark</span>
+        </div>
+        <div class="mode-toggle" aria-label="User mode">
+          <span class="mode-caption">Operator</span>
+          <label class="switch">
+            <input id="userModeToggle" type="checkbox" checked>
+            <span class="slider"></span>
+          </label>
+          <span class="mode-caption">Expert</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -122,16 +156,16 @@
             <input id="speed" type="number" value="1000" max="9999" style="width:70px;">
           </div>
           <div id="flowRow" class="input-row">
-            <span class="input-label">Flow (m3/h)</span>
+            <span class="input-label">Flow (m³/h)</span>
             <input id="flow" type="number" placeholder="" max="999" style="width:70px;">
           </div>
           <div id="flowOffsetRow" class="input-row">
-            <span class="input-label">Flow meter offset (m3/h)</span>
+            <span class="input-label">Flow meter offset (m³/h)</span>
             <input id="flowOffset" type="number" value="0" step="0.1" min="-100000" max="9999" inputmode="decimal" style="width:70px;" placeholder="-5 or 10">
           </div>
           <span id="calcSpeedDisplay" class="hint"></span>
           <div id="volRow" class="input-row">
-            <span class="input-label">Volume (m3/km)</span>
+            <span class="input-label">Volume (m³/km)</span>
             <input id="vol" type="number" placeholder="" max="9999" style="width:70px;">
           </div>
           <div id="pipeSizeRow" class="input-row">
@@ -164,6 +198,7 @@
           <div style="font-size:12px; color:var(--muted);">Display</div>
           <button id="displayCoordsBtn">Display coordinates</button>
           <button id="graphsBtn">Graphs</button>
+          <button id="toggleNavBtn">Hide navigation</button>
           <label style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted);">
             Display EPSG
             <select id="displayEpsg" style="min-width:160px; font-size:14px; color:var(--text); background:#1c1c1c; border:1px solid var(--line);">
@@ -208,6 +243,10 @@
         <button id="exportPreviewClose" class="secondary small">Close</button>
       </div>
       <div class="modal-body" style="gap:10px;">
+        <label style="color:var(--text); font-size:14px;">
+          Export name
+          <input id="exportPdfName" type="text" placeholder="Markerlist_Project_Client_PipeId">
+        </label>
         <div class="export-epsg">
           <label style="color:var(--text); font-size:14px;">
             Coordinate reference (EPSG)
@@ -259,6 +298,10 @@
         <button id="exportExcelClose" class="secondary small">Close</button>
       </div>
       <div class="modal-body" style="gap:10px;">
+        <label style="color:var(--text); font-size:14px;">
+          Export name
+          <input id="exportExcelName" type="text" placeholder="Markerlist_Project_Client_PipeId">
+        </label>
         <div class="export-epsg" style="align-items:flex-start;">
           <label style="color:var(--text); font-size:14px; min-width:220px;">
             Coordinate systems (select one or more)
@@ -379,7 +422,10 @@
             </label>
             <label id="gpsUtmZoneLabel" style="color:var(--text); font-size:13px; min-width:140px; display:none;">
               UTM zone
-              <input id="gpsUtmZone" placeholder="31N" style="width:120px;">
+              <div class="utm-buttons" style="margin-top:4px;">
+                <input id="gpsUtmZone" placeholder="31N" style="width:120px;">
+                <button id="gpsUtmZonePick" type="button" class="secondary small">Pick on map</button>
+              </div>
             </label>
           </div>
           <button id="gpsSampleXlsx" style="margin:6px 0;">Download example Excel</button>
@@ -443,14 +489,17 @@
           </label>
           <label id="gpsCsvUtmZoneLabel" style="display:none;">
             UTM zone
-            <input id="gpsCsvUtmZone" placeholder="31N" style="width:120px;">
+            <div class="utm-buttons" style="margin-top:4px;">
+              <input id="gpsCsvUtmZone" placeholder="31N" style="width:120px;">
+              <button id="gpsCsvUtmZonePick" type="button" class="secondary small">Pick on map</button>
+            </div>
           </label>
           <label>
-            Latitude column
+            <span id="gpsCsvLatLabel">Latitude column</span>
             <select id="gpsCsvLat"></select>
           </label>
           <label>
-            Longitude column
+            <span id="gpsCsvLonLabel">Longitude column</span>
             <select id="gpsCsvLon"></select>
           </label>
           <label>
@@ -464,6 +513,48 @@
       </div>
       <div class="modal-footer">
         <button id="gpsCsvApply">Use for markers</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="utmPickerModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:980px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">UTM zone helper</h3>
+        <button id="utmPickerClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body utm-picker-body">
+        <div class="utm-panel">
+          <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">Pick by country/region</div>
+          <label>
+            Country/region
+            <select id="utmCountrySelect"></select>
+          </label>
+          <div class="utm-readout" id="utmCountryReadout" style="margin-top:6px;">Select a country to set zone.</div>
+        </div>
+        <div class="utm-panel">
+          <div style="font-size:12px; color:var(--muted); margin-bottom:6px;">Pick on map (click on the map)</div>
+          <svg id="utmMap" class="utm-map" viewBox="0 0 600 300" role="img" aria-label="World map for UTM zone selection">
+            <rect x="0" y="0" width="600" height="300" fill="#0b0b0b" />
+            <image href="assets/world-map.png" x="0" y="0" width="600" height="300" preserveAspectRatio="none" pointer-events="none" />
+            <g stroke="rgba(255,255,255,0.08)" stroke-width="1">
+              <line x1="100" y1="0" x2="100" y2="300" />
+              <line x1="200" y1="0" x2="200" y2="300" />
+              <line x1="300" y1="0" x2="300" y2="300" />
+              <line x1="400" y1="0" x2="400" y2="300" />
+              <line x1="500" y1="0" x2="500" y2="300" />
+              <line x1="0" y1="75" x2="600" y2="75" />
+              <line x1="0" y1="150" x2="600" y2="150" />
+              <line x1="0" y1="225" x2="600" y2="225" />
+            </g>
+            <text x="10" y="18">Click to select a UTM zone</text>
+          </svg>
+          <div class="utm-readout" id="utmMapReadout" style="margin-top:6px;">Lon: —, Lat: —, Zone: —</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="utmPickerApply" class="secondary">Apply zone</button>
       </div>
     </div>
   </div>
