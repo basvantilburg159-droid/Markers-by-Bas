@@ -5,14 +5,38 @@
   const clientEl = document.getElementById('client');
   const pipeIdEl = document.getElementById('pipeId');
   const themeToggle = document.getElementById('themeToggle');
+  const optionsToggle = document.getElementById('optionsToggle');
+  const onlineToggle = document.getElementById('onlineToggle');
   const syncEnabledEl = document.getElementById('syncEnabled');
+  const firebaseStatusDot = document.getElementById('firebaseStatusDot');
+  const cloudSyncBlock = document.getElementById('cloudSyncBlock');
   const cloudFileNameEl = document.getElementById('cloudFileName');
+  const cloudCopyFormBtn = document.getElementById('cloudCopyFormBtn');
   const cloudFilesListEl = document.getElementById('cloudFilesList');
   const cloudSaveBtn = document.getElementById('cloudSaveBtn');
   const cloudLoadBtn = document.getElementById('cloudLoadBtn');
   const cloudDeleteBtn = document.getElementById('cloudDeleteBtn');
   const cloudRefreshBtn = document.getElementById('cloudRefreshBtn');
   const cloudStatusEl = document.getElementById('cloudStatus');
+  const loginModal = document.getElementById('loginModal');
+  const loginNameEl = document.getElementById('loginName');
+  const loginPasswordEl = document.getElementById('loginPassword');
+  const loginSubmit = document.getElementById('loginSubmit');
+  const loginCancel = document.getElementById('loginCancel');
+  const loginError = document.getElementById('loginError');
+  const cloudProjectModal = document.getElementById('cloudProjectModal');
+  const cloudProjectClose = document.getElementById('cloudProjectClose');
+  const cloudProjectCreateTab = document.getElementById('cloudProjectCreateTab');
+  const cloudProjectOpenTab = document.getElementById('cloudProjectOpenTab');
+  const cloudProjectCreate = document.getElementById('cloudProjectCreate');
+  const cloudProjectOpen = document.getElementById('cloudProjectOpen');
+  const cloudProjectName = document.getElementById('cloudProjectName');
+  const cloudProjectCreateBtn = document.getElementById('cloudProjectCreateBtn');
+  const cloudProjectSelect = document.getElementById('cloudProjectSelect');
+  const cloudProjectOpenBtn = document.getElementById('cloudProjectOpenBtn');
+  const cloudProjectRefreshBtn = document.getElementById('cloudProjectRefreshBtn');
+  const cloudProjectStatus = document.getElementById('cloudProjectStatus');
+  const onlineUserLabel = document.getElementById('onlineUserLabel');
   const userModeToggle = document.getElementById('userModeToggle');
   const speedEl = document.getElementById('speed');
   const flowEl = document.getElementById('flow');
@@ -102,6 +126,7 @@
   const gpsUtmZonePick = document.getElementById('gpsUtmZonePick');
   const gpsCsvUtmZonePick = document.getElementById('gpsCsvUtmZonePick');
   const toggleNavBtn = document.getElementById('toggleNavBtn');
+  const toggleLastModifiedBtn = document.getElementById('toggleLastModifiedBtn');
   const utmPickerModal = document.getElementById('utmPickerModal');
   const utmPickerClose = document.getElementById('utmPickerClose');
   const utmPickerApply = document.getElementById('utmPickerApply');
@@ -124,6 +149,8 @@
   const gpsUtmZoneInput = document.getElementById('gpsUtmZone');
   const displayCoordsBtn = document.getElementById('displayCoordsBtn');
   const displayEpsgSelect = document.getElementById('displayEpsg');
+  const displayEpsgRow = document.getElementById('displayEpsgRow');
+  const optionsPanelBody = document.getElementById('optionsPanelBody');
 
   const defaultState = () => ({
     project: 'New Run',
@@ -144,8 +171,12 @@
     showCoords: false,
     displayEpsg: 'EPSG:4326',
     showNavigate: true,
+    showLastModified: false,
+    showOptions: true,
     exportName: '',
     theme: 'dark',
+    onlineMode: false,
+    userName: '',
     syncEnabled: false,
     pts: [
       { n: 'Launcher', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
@@ -159,7 +190,6 @@
 
   const saveLocal = () => {
     localStorage.setItem('pigging-state', JSON.stringify(state));
-    scheduleSyncSave();
   };
 
   const normalizeState = () => {
@@ -173,7 +203,11 @@
     state.showNavigate = state.showNavigate !== false;
     state.exportName = state.exportName || '';
     state.theme = state.theme === 'light' ? 'light' : 'dark';
-    state.syncEnabled = !!state.syncEnabled;
+    state.onlineMode = state.onlineMode !== false;
+    state.userName = state.userName || '';
+    state.syncEnabled = state.onlineMode;
+    state.showLastModified = !!state.showLastModified;
+    state.showOptions = state.showOptions !== false;
     state.pipeSize = state.pipeSize ?? '';
     state.pipeWt = state.pipeWt ?? '';
     state.pipeWtAuto = state.pipeWtAuto !== false;
@@ -184,8 +218,25 @@
       missed: !!p.missed,
       lat: p.lat ?? null,
       lon: p.lon ?? null,
-      alt: p.alt ?? null
+      alt: p.alt ?? null,
+      lastBy: p.lastBy || ''
     }));
+  };
+
+  const normalizePoints = (pts = []) => (pts || []).map((p, idx) => ({
+    n: p.n || `M${idx}`,
+    d: Number(p.d) || 0,
+    t: p.t || '',
+    missed: !!p.missed,
+    lat: p.lat ?? null,
+    lon: p.lon ?? null,
+    alt: p.alt ?? null,
+    lastBy: p.lastBy || ''
+  }));
+
+  const getCurrentUserName = () => {
+    if (state.onlineMode && onlineAuthed && state.userName) return state.userName;
+    return 'Local';
   };
 
   const toSec = (t) => {
@@ -230,14 +281,33 @@
   let syncTimer = null;
 
   const cloudNameKey = 'pigging-cloud-file-name';
+  const onlineUserKey = 'pigging-online-user';
+  let onlineAuthed = false;
+  let cachedOnlineUser = localStorage.getItem(onlineUserKey) || '';
+  const firebasePingDoc = { collection: 'meta', doc: 'ping' };
+  let firebaseAuth = null;
+  let firebaseAuthReady = false;
+  let firebaseAuthPromise = null;
 
   const setCloudStatus = (msg) => {
     if (cloudStatusEl) cloudStatusEl.textContent = msg || '';
   };
 
+  const setCloudProjectStatus = (msg) => {
+    if (cloudProjectStatus) cloudProjectStatus.textContent = msg || '';
+  };
+
   const sanitizeDocId = (raw) => {
     if (!raw) return '';
     return String(raw).trim().replace(/[^a-z0-9-_ ]/gi, '').replace(/\s+/g, '_').slice(0, 64);
+  };
+
+  const buildCloudNameFromForm = () => {
+    const parts = [state.project, state.client, state.pipeId]
+      .map((v) => (v || '').trim())
+      .filter((v) => v.length > 0);
+    const raw = parts.join('_');
+    return sanitizeDocId(raw);
   };
 
   const getCloudSyncName = () => (cloudFileNameEl ? cloudFileNameEl.value.trim() : '');
@@ -249,7 +319,30 @@
       firebase.initializeApp(window.FIREBASE_CONFIG);
       firestoreDb = firebase.firestore();
     }
+    if (!firebaseAuth && firebase.auth) firebaseAuth = firebase.auth();
     return true;
+  };
+
+  const ensureFirebaseAuth = () => {
+    const ready = initFirebase();
+    if (!ready) return false;
+    if (!firebaseAuth) return false;
+    if (!firebaseAuthPromise) {
+      firebaseAuthPromise = firebaseAuth.signInAnonymously()
+        .then(() => { firebaseAuthReady = true; })
+        .catch(() => { firebaseAuthReady = false; });
+    }
+    return true;
+  };
+
+  const ensureAuthReady = () => {
+    if (!ensureFirebase()) return Promise.reject(new Error('firebase-not-ready'));
+    if (!ensureFirebaseAuth()) return Promise.reject(new Error('auth-not-ready'));
+    return (firebaseAuthPromise || Promise.resolve()).then(() => {
+      firebaseAuthReady = !!(firebaseAuth && firebaseAuth.currentUser);
+      if (!firebaseAuthReady) throw new Error('auth-failed');
+      return true;
+    });
   };
 
   const ensureFirebase = () => {
@@ -258,43 +351,111 @@
     return ready;
   };
 
+  const setFirebaseStatus = (isOk) => {
+    if (!firebaseStatusDot) return;
+    firebaseStatusDot.classList.toggle('ok', !!isOk);
+    firebaseStatusDot.title = isOk ? 'Firebase connected' : 'Firebase disconnected';
+  };
+
+  const checkFirebaseConnection = () => {
+    if (!state.onlineMode || !onlineAuthed) {
+      setFirebaseStatus(false);
+      return;
+    }
+    if (!ensureFirebase()) {
+      setFirebaseStatus(false);
+      return;
+    }
+    ensureFirebaseAuth();
+    if (!firebaseAuthReady) {
+      setFirebaseStatus(false);
+      return;
+    }
+    const ref = firestoreDb.collection(firebasePingDoc.collection).doc(firebasePingDoc.doc);
+    ref.get({ source: 'server' })
+      .then(() => setFirebaseStatus(true))
+      .catch(() => setFirebaseStatus(false));
+  };
+
   const getCloudDocId = (name) => sanitizeDocId(name || '');
+
+  const buildCloudOptions = (snap) => {
+    const options = [];
+    snap.forEach((doc) => {
+      const data = doc.data() || {};
+      const updatedAt = data.updatedAt ? new Date(data.updatedAt) : null;
+      const labelDate = updatedAt ? updatedAt.toLocaleString() : 'unknown';
+      const name = data.name || doc.id;
+      options.push({ id: doc.id, name, label: `${name} — ${labelDate}` });
+    });
+    return options;
+  };
+
+  const renderCloudOptions = (selectEl, options, placeholderText) => {
+    if (!selectEl) return;
+    selectEl.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = placeholderText;
+    selectEl.appendChild(placeholder);
+    options.forEach((opt) => {
+      const el = document.createElement('option');
+      el.value = opt.id;
+      el.textContent = opt.label;
+      el.dataset.name = opt.name;
+      selectEl.appendChild(el);
+    });
+  };
 
   const loadCloudList = () => {
     if (!cloudFilesListEl) return;
-    if (!ensureFirebase()) return;
+    if (!state.onlineMode || !onlineAuthed) {
+      setCloudStatus('Login required for cloud sync.');
+      return;
+    }
     setCloudStatus('Loading cloud list...');
-    firestoreDb.collection('markerfiles').orderBy('updatedAt', 'desc').limit(200).get()
+    ensureAuthReady()
+      .then(() => firestoreDb.collection('markerfiles').orderBy('updatedAt', 'desc').limit(200).get())
       .then((snap) => {
-        const options = [];
-        snap.forEach((doc) => {
-          const data = doc.data() || {};
-          const updatedAt = data.updatedAt ? new Date(data.updatedAt) : null;
-          const labelDate = updatedAt ? updatedAt.toLocaleString() : 'unknown';
-          const name = data.name || doc.id;
-          options.push({ id: doc.id, name, label: `${name} — ${labelDate}` });
-        });
-        cloudFilesListEl.innerHTML = '';
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = options.length ? 'Select a cloud file' : 'No cloud files yet';
-        cloudFilesListEl.appendChild(placeholder);
-        options.forEach((opt) => {
-          const el = document.createElement('option');
-          el.value = opt.id;
-          el.textContent = opt.label;
-          el.dataset.name = opt.name;
-          cloudFilesListEl.appendChild(el);
-        });
+        const options = buildCloudOptions(snap);
+        renderCloudOptions(
+          cloudFilesListEl,
+          options,
+          options.length ? 'Select a cloud file' : 'No cloud files yet'
+        );
         setCloudStatus(`Loaded ${options.length} cloud file${options.length === 1 ? '' : 's'}.`);
       })
       .catch(() => setCloudStatus('Failed to load cloud list.'));
   };
 
+  const loadCloudProjectList = () => {
+    if (!cloudProjectSelect) return;
+    if (!state.onlineMode || !onlineAuthed) {
+      setCloudProjectStatus('Login required for cloud projects.');
+      return;
+    }
+    setCloudProjectStatus('Loading cloud projects...');
+    ensureAuthReady()
+      .then(() => firestoreDb.collection('markerfiles').orderBy('updatedAt', 'desc').limit(200).get())
+      .then((snap) => {
+        const options = buildCloudOptions(snap);
+        renderCloudOptions(
+          cloudProjectSelect,
+          options,
+          options.length ? 'Select a cloud project' : 'No cloud projects yet'
+        );
+        setCloudProjectStatus(`Loaded ${options.length} cloud project${options.length === 1 ? '' : 's'}.`);
+      })
+      .catch(() => setCloudProjectStatus('Failed to load cloud projects.'));
+  };
+
   const getCloudNameInput = () => (cloudFileNameEl ? cloudFileNameEl.value.trim() : '');
 
   const saveCloudFile = () => {
-    if (!ensureFirebase()) return;
+    if (!state.onlineMode || !onlineAuthed) {
+      setCloudStatus('Login required for cloud sync.');
+      return;
+    }
     const name = getCloudNameInput() || state.project || '';
     const docId = getCloudDocId(name);
     if (!docId) {
@@ -304,12 +465,13 @@
     if (cloudFileNameEl) cloudFileNameEl.value = name;
     localStorage.setItem(cloudNameKey, name);
     setCloudStatus('Saving to cloud...');
-    firestoreDb.collection('markerfiles').doc(docId).set({
-      name,
-      state,
-      updatedAt: Date.now(),
-      clientId
-    }, { merge: true })
+    ensureAuthReady()
+      .then(() => firestoreDb.collection('markerfiles').doc(docId).set({
+        name,
+        state,
+        updatedAt: Date.now(),
+        clientId
+      }, { merge: true }))
       .then(() => {
         setCloudStatus('Saved to cloud.');
         loadCloudList();
@@ -319,37 +481,63 @@
   };
 
   const loadCloudFile = () => {
+    if (!state.onlineMode || !onlineAuthed) {
+      setCloudStatus('Login required for cloud sync.');
+      return;
+    }
     if (!ensureFirebase()) return;
     const docId = (cloudFilesListEl && cloudFilesListEl.value) || getCloudDocId(getCloudNameInput());
     if (!docId) {
       setCloudStatus('Select or enter a cloud file name.');
       return;
     }
-    setCloudStatus('Loading from cloud...');
-    firestoreDb.collection('markerfiles').doc(docId).get()
+    loadCloudFileById(docId, setCloudStatus);
+  };
+
+  function loadCloudFileById(docId, statusSetter = setCloudStatus) {
+    if (!state.onlineMode || !onlineAuthed) {
+      statusSetter('Login required for cloud sync.');
+      return;
+    }
+    if (!docId) {
+      statusSetter('Select a cloud file.');
+      return;
+    }
+    statusSetter('Loading from cloud...');
+    const prevOnlineMode = state.onlineMode;
+    const prevUserName = state.userName;
+    const prevSyncEnabled = state.syncEnabled;
+    ensureAuthReady()
+      .then(() => firestoreDb.collection('markerfiles').doc(docId).get())
       .then((doc) => {
         if (!doc.exists) {
-          setCloudStatus('Cloud file not found.');
+          statusSetter('Cloud file not found.');
           return;
         }
         const data = doc.data() || {};
         if (!data.state) {
-          setCloudStatus('Cloud file is empty.');
+          statusSetter('Cloud file is empty.');
           return;
         }
         state = data.state;
         normalizeState();
+        state.onlineMode = prevOnlineMode;
+        state.userName = prevUserName || state.userName;
+        state.syncEnabled = prevSyncEnabled;
         render();
         saveLocal();
         if (cloudFileNameEl) cloudFileNameEl.value = data.name || docId;
         localStorage.setItem(cloudNameKey, data.name || docId);
-        setCloudStatus('Loaded from cloud.');
+        statusSetter('Loaded from cloud.');
       })
-      .catch(() => setCloudStatus('Failed to load cloud file.'));
-  };
+      .catch(() => statusSetter('Failed to load cloud file.'));
+  }
 
   const deleteCloudFile = () => {
-    if (!ensureFirebase()) return;
+    if (!state.onlineMode || !onlineAuthed) {
+      setCloudStatus('Login required for cloud sync.');
+      return;
+    }
     const docId = cloudFilesListEl ? cloudFilesListEl.value : '';
     if (!docId) {
       setCloudStatus('Select a cloud file to delete.');
@@ -357,7 +545,8 @@
     }
     if (!window.confirm('Delete this cloud file?')) return;
     setCloudStatus('Deleting cloud file...');
-    firestoreDb.collection('markerfiles').doc(docId).delete()
+    ensureAuthReady()
+      .then(() => firestoreDb.collection('markerfiles').doc(docId).delete())
       .then(() => {
         setCloudStatus('Cloud file deleted.');
         if (cloudFilesListEl) cloudFilesListEl.value = '';
@@ -371,8 +560,12 @@
     syncUnsub = null;
   };
 
+  const buildSyncPayload = () => ({
+    pts: normalizePoints(state.pts)
+  });
+
   const startSync = () => {
-    if (!state.syncEnabled) return;
+    if (!state.onlineMode || !onlineAuthed) return;
     if (!initFirebase()) {
       if (statusEl) statusEl.textContent = 'Firebase config missing. Add firebase-config.js values.';
       return;
@@ -390,10 +583,9 @@
       if (data.clientId === clientId) return;
       const ts = Number(data.updatedAt || 0);
       if (ts && ts <= lastRemoteTs) return;
-      if (!data.state) return;
+      if (!data.pts) return;
       isApplyingRemote = true;
-      state = data.state;
-      normalizeState();
+      state.pts = normalizePoints(data.pts);
       render();
       lastRemoteTs = ts || Date.now();
       isApplyingRemote = false;
@@ -401,14 +593,15 @@
   };
 
   const scheduleSyncSave = () => {
-    if (!state.syncEnabled || !firestoreDb || isApplyingRemote) return;
+    if (!state.onlineMode || !onlineAuthed || !firestoreDb || isApplyingRemote) return;
     const docId = getSyncDocId();
     if (!docId) return;
     if (syncTimer) clearTimeout(syncTimer);
     syncTimer = setTimeout(() => {
+      const syncState = buildSyncPayload();
       const ref = firestoreDb.collection('markerlists').doc(docId);
       ref.set({
-        state,
+        ...syncState,
         updatedAt: Date.now(),
         clientId
       }, { merge: true }).catch(() => {});
@@ -1227,7 +1420,16 @@
     if (cloudDeleteBtn) cloudDeleteBtn.disabled = editLocked;
     if (cloudRefreshBtn) cloudRefreshBtn.disabled = editLocked;
     if (themeToggle) themeToggle.checked = state.theme === 'dark';
+    if (optionsToggle) optionsToggle.checked = state.showOptions;
+    if (onlineToggle) onlineToggle.checked = !!state.onlineMode;
     document.body.dataset.theme = state.theme;
+    if (optionsPanelBody) optionsPanelBody.style.display = state.showOptions ? '' : 'none';
+    if (cloudSyncBlock) cloudSyncBlock.style.display = (state.onlineMode && onlineAuthed) ? '' : 'none';
+    if (onlineUserLabel) {
+      onlineUserLabel.textContent = (state.onlineMode && onlineAuthed && state.userName)
+        ? `Online user: ${state.userName}`
+        : '';
+    }
     if (importXlsxBtn) importXlsxBtn.disabled = operatorMode;
     if (gpsBtn) gpsBtn.disabled = operatorMode;
     if (gpsCsvBtn) gpsCsvBtn.disabled = operatorMode;
@@ -1245,7 +1447,9 @@
     const displayEpsg = state.displayEpsg || 'EPSG:4326';
     if (displayEpsgSelect) displayEpsgSelect.value = displayEpsg;
     if (displayCoordsBtn) displayCoordsBtn.textContent = state.showCoords ? 'Hide coordinates' : 'Show coordinates';
+    if (displayEpsgRow) displayEpsgRow.style.display = state.showCoords ? '' : 'none';
     if (toggleNavBtn) toggleNavBtn.textContent = state.showNavigate ? 'Google Maps on' : 'Google Maps off';
+    if (toggleLastModifiedBtn) toggleLastModifiedBtn.textContent = state.showLastModified ? 'Last modified on' : 'Last modified';
 
     const coordMeta = (() => {
       const code = displayEpsg.toUpperCase();
@@ -1283,6 +1487,7 @@
     })();
 
     const coordHeader = state.showCoords ? coordMeta.headers.map((h) => `<th>${h}</th>`).join('') : '';
+    const lastModifiedHeader = state.showLastModified ? '<th>Last modified</th>' : '';
 
     table.innerHTML = `
       <tr>
@@ -1293,6 +1498,7 @@
         <th>Expected volume (m³)</th>
         <th>Expected time</th>
         <th>Actual passing (hh:mm:ss)</th>
+        ${lastModifiedHeader}
         ${state.showNavigate ? '<th>Google Maps</th>' : ''}
         <th></th>
       </tr>`;
@@ -1319,6 +1525,7 @@
           ${p.missed && i > 0 && i < state.pts.length - 1 ? `<span class="missed">Not detected</span>` : `<input type="time" step="1" value="${p.t}" data-time="${i}">`}
           ${i > 0 && i < state.pts.length - 1 ? `<button class="small secondary" data-missed="${i}">Not detected</button>` : ''}
         </td>
+        ${state.showLastModified ? `<td>${p.lastBy || ''}</td>` : ''}
         ${state.showNavigate ? `<td>${hasCoords ? `<a class="small secondary" href="${navUrl}" target="_blank" rel="noopener">Open</a>` : ''}</td>` : ''}
           <td>${i > 0 && i < state.pts.length - 1 ? `<button class="small" data-del="${i}" aria-label="Remove" ${editLocked ? 'disabled' : ''}>🗑</button>` : ''}</td>`;
 
@@ -1327,7 +1534,7 @@
       if (i < state.pts.length - 1) {
         const seg = table.insertRow();
         const coordCount = state.showCoords ? coordMeta.headers.length : 0;
-        const remainingCols = coordCount + (state.showNavigate ? 6 : 5);
+        const remainingCols = coordCount + (state.showNavigate ? 6 : 5) + (state.showLastModified ? 1 : 0);
         seg.innerHTML = `
           <td>to ${state.pts[i + 1].n}</td>
           <td><input value="${p.d}" ${editLocked ? 'disabled' : ''} data-dist="${i}"></td>
@@ -2617,13 +2824,15 @@
     if (state.locked) return;
     const now = new Date();
     state.pts[idx].t = toTime(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
+    state.pts[idx].lastBy = getCurrentUserName();
     render();
+    scheduleSyncSave();
   };
 
   const addMarker = () => {
     if (isEditLocked()) return;
     const idx = state.pts.length - 1;
-    state.pts.splice(idx, 0, { n: `M${idx}`, d: 0, t: '', missed: false, lat: null, lon: null });
+    state.pts.splice(idx, 0, { n: `M${idx}`, d: 0, t: '', missed: false, lat: null, lon: null, lastBy: getCurrentUserName() });
     render();
   };
 
@@ -2637,6 +2846,7 @@
     if (isEditLocked() || i === 0 || i === state.pts.length - 1) return;
     state.pts.splice(i, 1);
     render();
+    scheduleSyncSave();
   };
 
   const applyPaste = () => {
@@ -3132,8 +3342,14 @@
     const r = new FileReader();
     r.onload = () => {
       try {
+        const prevOnlineMode = state.onlineMode;
+        const prevUserName = state.userName;
+        const prevSyncEnabled = state.syncEnabled;
         state = JSON.parse(r.result);
         normalizeState();
+        state.onlineMode = prevOnlineMode;
+        state.userName = prevUserName || state.userName;
+        state.syncEnabled = prevSyncEnabled;
         render();
         statusEl.textContent = 'Loaded JSON.';
       } catch (err) {
@@ -3325,6 +3541,7 @@
   if (exportExcelBtn) exportExcelBtn.onclick = openExportExcelModal;
   if (displayCoordsBtn) displayCoordsBtn.onclick = () => { state.showCoords = !state.showCoords; render(); };
   if (toggleNavBtn) toggleNavBtn.onclick = () => { state.showNavigate = !state.showNavigate; render(); };
+  if (toggleLastModifiedBtn) toggleLastModifiedBtn.onclick = () => { state.showLastModified = !state.showLastModified; render(); };
   if (displayEpsgSelect) displayEpsgSelect.onchange = () => { state.displayEpsg = displayEpsgSelect.value || 'EPSG:4326'; render(); };
 
   if (exportPreviewClose) exportPreviewClose.onclick = closeExportPreview;
@@ -3443,6 +3660,115 @@
   if (cloudLoadBtn) cloudLoadBtn.onclick = loadCloudFile;
   if (cloudDeleteBtn) cloudDeleteBtn.onclick = deleteCloudFile;
   if (cloudRefreshBtn) cloudRefreshBtn.onclick = loadCloudList;
+  if (cloudCopyFormBtn) cloudCopyFormBtn.onclick = () => {
+    const name = buildCloudNameFromForm();
+    if (!name) {
+      setCloudStatus('Enter Project, Client, and Pipe ID first.');
+      return;
+    }
+    if (cloudFileNameEl) cloudFileNameEl.value = name;
+    localStorage.setItem(cloudNameKey, name);
+    setCloudStatus('Cloud name copied from form.');
+  };
+
+  const openLoginModal = () => {
+    if (!loginModal) return;
+    if (loginNameEl) loginNameEl.value = cachedOnlineUser;
+    if (loginPasswordEl) loginPasswordEl.value = '';
+    if (loginError) loginError.textContent = '';
+    loginModal.classList.add('show');
+  };
+
+  const setCloudProjectMode = (mode) => {
+    if (!cloudProjectCreate || !cloudProjectOpen) return;
+    const isCreate = mode === 'create';
+    cloudProjectCreate.style.display = isCreate ? 'flex' : 'none';
+    cloudProjectOpen.style.display = isCreate ? 'none' : 'flex';
+  };
+
+  const openCloudProjectModal = () => {
+    if (!cloudProjectModal) return;
+    if (cloudProjectName) cloudProjectName.value = buildExportBaseName();
+    setCloudProjectMode('create');
+    setCloudProjectStatus('');
+    loadCloudProjectList();
+    cloudProjectModal.classList.add('show');
+  };
+
+  const closeCloudProjectModal = () => {
+    if (!cloudProjectModal) return;
+    cloudProjectModal.classList.remove('show');
+  };
+
+  const closeLoginModal = () => {
+    if (!loginModal) return;
+    loginModal.classList.remove('show');
+  };
+
+  const applyLogin = () => {
+    const name = (loginNameEl ? loginNameEl.value : '').trim();
+    const pass = (loginPasswordEl ? loginPasswordEl.value : '').trim();
+    if (!name) {
+      if (loginError) loginError.textContent = 'Enter your name.';
+      return;
+    }
+    if (!pass) {
+      if (loginError) loginError.textContent = 'Enter your password.';
+      return;
+    }
+    if (name.toLowerCase() !== pass.toLowerCase()) {
+      if (loginError) loginError.textContent = 'Password must match name.';
+      return;
+    }
+    onlineAuthed = true;
+    cachedOnlineUser = name;
+    localStorage.setItem(onlineUserKey, name);
+    state.userName = name;
+    state.syncEnabled = true;
+    ensureFirebaseAuth();
+    closeLoginModal();
+    render();
+    saveLocal();
+    startSync();
+    loadCloudList();
+    checkFirebaseConnection();
+  };
+
+  if (loginSubmit) loginSubmit.onclick = applyLogin;
+  if (loginCancel) loginCancel.onclick = () => {
+    closeLoginModal();
+    state.onlineMode = false;
+    onlineAuthed = false;
+    if (onlineToggle) onlineToggle.checked = false;
+    state.syncEnabled = false;
+    if (syncEnabledEl) syncEnabledEl.checked = false;
+    stopSync();
+    render();
+    saveLocal();
+  };
+  if (cloudProjectCreateTab) cloudProjectCreateTab.onclick = () => setCloudProjectMode('create');
+  if (cloudProjectOpenTab) cloudProjectOpenTab.onclick = () => setCloudProjectMode('open');
+  if (cloudProjectClose) cloudProjectClose.onclick = closeCloudProjectModal;
+  if (cloudProjectRefreshBtn) cloudProjectRefreshBtn.onclick = loadCloudProjectList;
+  if (cloudProjectCreateBtn) cloudProjectCreateBtn.onclick = () => {
+    const name = (cloudProjectName ? cloudProjectName.value : '').trim() || buildExportBaseName();
+    if (cloudProjectName) cloudProjectName.value = name;
+    if (cloudFileNameEl) cloudFileNameEl.value = name;
+    saveCloudFile();
+    closeCloudProjectModal();
+  };
+  if (cloudProjectOpenBtn) cloudProjectOpenBtn.onclick = () => {
+    const docId = cloudProjectSelect ? cloudProjectSelect.value : '';
+    if (!docId) {
+      setCloudProjectStatus('Select a cloud project.');
+      return;
+    }
+    loadCloudFileById(docId, setCloudProjectStatus);
+    closeCloudProjectModal();
+  };
+  if (loginPasswordEl) loginPasswordEl.onkeydown = (e) => {
+    if (e.key === 'Enter') applyLogin();
+  };
   speedEl.oninput = () => { state.speed = speedEl.value; render(); };
   flowEl.oninput = () => { state.flow = flowEl.value; render(); };
   flowOffsetEl.oninput = () => {
@@ -3494,6 +3820,28 @@
       render();
     };
   }
+  if (optionsToggle) {
+    optionsToggle.onchange = () => {
+      state.showOptions = !!optionsToggle.checked;
+      render();
+      saveLocal();
+    };
+  }
+  if (onlineToggle) {
+    onlineToggle.onchange = () => {
+      state.onlineMode = !!onlineToggle.checked;
+      state.syncEnabled = state.onlineMode;
+      stopSync();
+      if (state.onlineMode) ensureFirebaseAuth();
+      if (!state.onlineMode) {
+        onlineAuthed = false;
+        if (syncEnabledEl) syncEnabledEl.checked = false;
+      }
+      render();
+      saveLocal();
+      if (state.onlineMode) openLoginModal();
+    };
+  }
 
   // Update state live, but render only on commit (change or Enter) to avoid disrupting typing.
   table.addEventListener('input', (e) => {
@@ -3501,19 +3849,25 @@
     if (t.dataset.name) {
       if (isEditLocked()) return;
       state.pts[Number(t.dataset.name)].n = t.value;
+      state.pts[Number(t.dataset.name)].lastBy = getCurrentUserName();
+      scheduleSyncSave();
       return; // defer render until commit
     }
     if (t.dataset.dist) {
       if (isEditLocked()) return;
       state.pts[Number(t.dataset.dist)].d = Number(t.value) || 0;
+      state.pts[Number(t.dataset.dist)].lastBy = getCurrentUserName();
       updateExpectations(); // keep expected times in sync while typing distances
+      scheduleSyncSave();
       return; // render on commit
     }
     if (t.dataset.time) {
       const idx = Number(t.dataset.time);
       state.pts[idx].t = t.value;
       state.pts[idx].missed = false;
+      state.pts[idx].lastBy = getCurrentUserName();
       updateExpectations();
+      scheduleSyncSave();
       return; // render on commit
     }
   });
@@ -3523,6 +3877,10 @@
     if (isEditLocked() && (t.dataset.name || t.dataset.dist)) return;
     if (t.dataset.name || t.dataset.dist) {
       render();
+      scheduleSyncSave();
+    }
+    if (t.dataset.time) {
+      scheduleSyncSave();
     }
     // Time changes are handled live without full render to preserve focus while typing
   });
@@ -3536,10 +3894,12 @@
       }
       e.preventDefault();
       render();
+      scheduleSyncSave();
     }
     if (e.key === 'Enter' && t.dataset.time) {
       e.preventDefault();
       // Avoid full render on Enter to keep focus stable
+      scheduleSyncSave();
     }
   });
 
@@ -3553,15 +3913,44 @@
         const nowMissed = !p.missed;
         p.missed = nowMissed;
         p.t = '';
+        p.lastBy = getCurrentUserName();
         render();
+        scheduleSyncSave();
       }
     }
   });
 
   const registerSW = async () => {
+    const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if (isLocalhost) {
+      if ('serviceWorker' in navigator) {
+        try {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        } catch (e) {}
+      }
+      if (statusEl) statusEl.textContent = 'Dev mode: service worker disabled.';
+      return;
+    }
     if ('serviceWorker' in navigator) {
       try {
-        await navigator.serviceWorker.register('service-worker.js');
+        const reg = await navigator.serviceWorker.register('service-worker.js');
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        });
+        if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
         statusEl.textContent = 'Offline cache ready.';
       } catch (e) {}
     }
@@ -3571,7 +3960,10 @@
   const cachedCloudName = localStorage.getItem(cloudNameKey);
   if (cloudFileNameEl && cachedCloudName) cloudFileNameEl.value = cachedCloudName;
   render();
+  if (state.onlineMode && !onlineAuthed) openLoginModal();
   if (state.syncEnabled) startSync();
   loadCloudList();
+  checkFirebaseConnection();
+  setInterval(checkFirebaseConnection, 15000);
   registerSW();
 })();

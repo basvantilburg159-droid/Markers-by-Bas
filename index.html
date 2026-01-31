@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Markers by Bas V2.01</title>
+  <title>Markers by Bas V2.01 — Windows Web App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="manifest" href="manifest.webmanifest">
   <style>
@@ -14,8 +14,9 @@
     body { background:var(--bg); color:var(--text); font-family:Segoe UI,Arial,sans-serif; margin:0; padding:16px; }
     h1 { margin:0; color:var(--accent); }
     .header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin:0 0 12px; }
-    .mode-toggle { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
-    .mode-toggle .mode-caption { color:var(--text); font-weight:600; font-size:12px; width:48px; text-align:left; }
+    .mode-toggle { display:flex; align-items:center; gap:4px; font-size:12px; color:var(--muted); }
+    .mode-toggle .mode-caption { color:var(--text); font-weight:600; font-size:12px; width:62px; text-align:center; }
+    .mode-toggle.options-toggle .mode-caption { width:auto; white-space:nowrap; text-align:left; }
     .switch { position:relative; display:inline-block; width:44px; height:22px; }
     .switch input { opacity:0; width:0; height:0; }
     .slider { position:absolute; cursor:pointer; inset:0; background:#333; border:1px solid var(--line); border-radius:22px; transition:0.2s; }
@@ -23,6 +24,11 @@
     .switch input:checked + .slider { background:var(--accent); }
     .switch input:checked + .slider:before { transform:translateX(22px); }
     input, button, textarea, select { font-size:14px; }
+    .short-input { width:150px; max-width:100%; }
+    .conn-dot { width:10px; height:10px; border-radius:50%; display:inline-block; background:#f55; border:1px solid #333; box-shadow:0 0 6px rgba(0,0,0,0.35); }
+    .conn-dot.ok { background:#2ecc71; }
+    .cloud-sync-block { display:flex; flex-direction:column; gap:6px; min-width:200px; }
+    .no-select { user-select:none; }
     input, textarea, select { background:#1c1c1c; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px 8px; }
     input:disabled, textarea:disabled, select:disabled { opacity:0.5; cursor:not-allowed; }
     input[type="time"] { color-scheme:dark; }
@@ -103,8 +109,9 @@
       <h1>
         <span>Markers by Bas</span>
         <span style="font-size:12px; color:#e6e6e6; opacity:0.8; margin-left:6px;">V2.01</span>
+        <span style="font-size:12px; color:#e6e6e6; opacity:0.8; margin-left:6px;">Windows Web App</span>
       </h1>
-      <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-top:14px;">
         <div class="mode-toggle" aria-label="Theme mode">
           <span class="mode-caption">Light</span>
           <label class="switch">
@@ -112,6 +119,14 @@
             <span class="slider"></span>
           </label>
           <span class="mode-caption">Dark</span>
+        </div>
+        <div class="mode-toggle options-toggle" aria-label="Options panel">
+          <span class="mode-caption">Show options</span>
+          <label class="switch">
+            <input id="optionsToggle" type="checkbox" checked>
+            <span class="slider"></span>
+          </label>
+          <span class="mode-caption">Hide options</span>
         </div>
         <div class="mode-toggle" aria-label="User mode">
           <span class="mode-caption">Operator</span>
@@ -121,53 +136,40 @@
           </label>
           <span class="mode-caption">Expert</span>
         </div>
+        <div class="mode-toggle" aria-label="Online mode" style="gap:4px;">
+          <span class="mode-caption">Offline</span>
+          <label class="switch">
+            <input id="onlineToggle" type="checkbox">
+            <span class="slider"></span>
+          </label>
+          <span class="mode-caption">Online</span>
+          <span id="onlineUserLabel" class="hint" style="font-size:13px; line-height:16px; margin-left:2px;"></span>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="layout">
     <div class="panel">
-      <div class="row" style="align-items:flex-start; align-content:flex-start;">
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
+      <div id="optionsPanelBody" class="row" style="align-items:flex-start; align-content:flex-start; gap:10px;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <label>
             Project number
-            <input id="project" value="New Run">
+            <input id="project" value="New Run" class="short-input" maxlength="20">
           </label>
           <label>
             Client
-            <input id="client" value="">
+            <input id="client" value="" class="short-input" maxlength="20">
           </label>
           <label>
             Pipe ID
-            <input id="pipeId" value="">
+            <input id="pipeId" value="" class="short-input" maxlength="20">
           </label>
-          <label style="flex-direction:row; align-items:center; gap:8px;">
-            <input id="syncEnabled" type="checkbox">
-            Realtime sync (Firebase)
-          </label>
-          <div style="margin-top:6px; font-size:12px; color:var(--muted);">Cloud files</div>
-          <div class="row" style="gap:8px; align-items:flex-end;">
-            <label style="min-width:200px; flex:1;">
-              Cloud file name
-              <input id="cloudFileName" placeholder="project-jan-31">
-            </label>
-            <label style="min-width:220px; flex:1;">
-              Cloud files list
-              <select id="cloudFilesList" style="min-width:200px;"></select>
-            </label>
-          </div>
-          <div class="mini-row" style="margin-top:4px;">
-            <button id="cloudSaveBtn" class="secondary small">Save to cloud</button>
-            <button id="cloudLoadBtn" class="secondary small">Load from cloud</button>
-            <button id="cloudDeleteBtn" class="secondary small">Delete</button>
-            <button id="cloudRefreshBtn" class="secondary small">Refresh list</button>
-          </div>
-          <div id="cloudStatus" class="hint" style="margin-top:4px;">Cloud list not loaded.</div>
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:220px;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <label>
             Mode
-            <select id="modeSelect" style="min-width:200px;">
+            <select id="modeSelect" style="min-width:130px;">
               <option value="manual">Manual speed</option>
               <option value="calc">From flow and volume</option>
               <option value="pipe">Calculate from pipe specs</option>
@@ -199,7 +201,7 @@
             <input id="pipeWt" type="text" placeholder="0.00" inputmode="decimal" pattern="^\d*(?:[\.,]\d{0,2})?$" style="width:70px;">
           </div>
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:200px;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <label>
             Launch time
             <input id="launch" type="time" step="1" value="08:30:00">
@@ -209,21 +211,15 @@
             <input id="launchDate" type="date">
           </label>
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:190px;">
-          <div style="font-size:12px; color:var(--muted);">Options</div>
-          <button id="newProject">New project</button>
-          <button id="loadJson">Load markerlist</button>
-          <button id="saveJson">Save markerlist</button>
-          <button id="addMarker">Add manual marker</button>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:170px;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <div style="font-size:12px; color:var(--muted);">Display</div>
           <button id="displayCoordsBtn">Display coordinates</button>
           <button id="graphsBtn">Graphs</button>
           <button id="toggleNavBtn">Hide navigation</button>
-          <label style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted);">
+          <button id="toggleLastModifiedBtn">Last modified</button>
+          <label id="displayEpsgRow" style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted);">
             Display EPSG
-            <select id="displayEpsg" style="min-width:160px; font-size:14px; color:var(--text); background:#1c1c1c; border:1px solid var(--line);">
+            <select id="displayEpsg" style="min-width:130px; font-size:14px; color:var(--text); background:#1c1c1c; border:1px solid var(--line);">
               <option value="EPSG:4326">EPSG:4326 — WGS84 lat/lon</option>
               <option value="EPSG:3857">EPSG:3857 — Web Mercator (m)</option>
               <option value="EPSG:28992">EPSG:28992 — Rijksdriehoek (RD)</option>
@@ -231,18 +227,51 @@
             </select>
           </label>
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:200px;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
+          <div style="font-size:12px; color:var(--muted);">Options</div>
+          <button id="newProject">New project</button>
+          <button id="loadJson">Load markerlist</button>
+          <button id="saveJson">Save markerlist</button>
+          <button id="addMarker">Add manual marker</button>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <div style="font-size:12px; color:var(--muted);">Import</div>
           <button id="importXlsxBtn">Import markers Excel</button>
           <button id="gpsBtn">KMZ/GPS import</button>
           <button id="gpsCsvBtn">Import .CSV (Geomeet)</button>
           <input type="file" id="gpsCsvInput" hidden accept=".csv">
         </div>
-        <div style="display:flex; flex-direction:column; gap:6px; min-width:170px;">
+        <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <div style="font-size:12px; color:var(--muted);">Export</div>
           <button id="exportXlsx">Export to Excel</button>
           <button id="exportPdf">Export to PDF</button>
           <button id="exportKmz">Export to KMZ</button>
+        </div>
+        <div id="cloudSyncBlock" class="cloud-sync-block">
+          <label>
+            Cloud file name
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input id="cloudFileName" placeholder="project-jan-31">
+              <button id="cloudCopyFormBtn" class="secondary small">Copy from form</button>
+              <button id="cloudSaveBtn" class="secondary small">Save to cloud</button>
+            </div>
+          </label>
+          <label>
+            Cloud files list
+            <select id="cloudFilesList" style="min-width:160px;"></select>
+          </label>
+          <div class="mini-row" style="margin-top:4px;">
+            <button id="cloudLoadBtn" class="secondary small">Load from cloud</button>
+            <button id="cloudDeleteBtn" class="secondary small">Delete</button>
+            <button id="cloudRefreshBtn" class="secondary small">Refresh list</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px; margin-top:4px;">
+            <div style="display:flex; align-items:center; gap:8px; margin:0;">
+              <span style="font-size:13px; color:var(--text);">Realtime sync</span>
+              <span id="firebaseStatusDot" class="conn-dot" title="Firebase connection status"></span>
+            </div>
+            <div id="cloudStatus" class="hint" style="margin:0; display:none;">Cloud list not loaded.</div>
+          </div>
         </div>
         <span class="spacer"></span>
       </div>
@@ -581,7 +610,69 @@
     </div>
   </div>
 
+  <div id="loginModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:420px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Online login</h3>
+        <button id="loginCancel" class="secondary small">Cancel</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <label style="color:var(--text); font-size:14px;">
+          Name
+          <input id="loginName" type="text" placeholder="Your name">
+        </label>
+        <label style="color:var(--text); font-size:14px;">
+          Password
+          <input id="loginPassword" type="password" placeholder="Enter password">
+        </label>
+        <div id="loginError" class="hint" style="color:#f55; min-height:16px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="loginSubmit">Login</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cloudProjectModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:520px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Cloud project</h3>
+        <button id="cloudProjectClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:12px;">
+        <div class="mini-row" style="margin:0;">
+          <button id="cloudProjectCreateTab" class="secondary small">Create cloud project</button>
+          <button id="cloudProjectOpenTab" class="secondary small">Open cloud project</button>
+        </div>
+        <div id="cloudProjectCreate" style="display:flex; flex-direction:column; gap:10px;">
+          <label style="color:var(--text); font-size:14px;">
+            Cloud project name
+            <input id="cloudProjectName" type="text" placeholder="Project_Client_PipeId">
+          </label>
+          <div class="hint">You can change the name before creating.</div>
+          <div class="modal-footer" style="justify-content:flex-start;">
+            <button id="cloudProjectCreateBtn">Create</button>
+          </div>
+        </div>
+        <div id="cloudProjectOpen" style="display:none; flex-direction:column; gap:10px;">
+          <label style="color:var(--text); font-size:14px;">
+            Available cloud projects
+            <select id="cloudProjectSelect"></select>
+          </label>
+          <div class="mini-row" style="margin:0;">
+            <button id="cloudProjectOpenBtn" class="secondary small">Open</button>
+            <button id="cloudProjectRefreshBtn" class="secondary small">Refresh</button>
+          </div>
+          <div id="cloudProjectStatus" class="hint"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="app.js"></script>

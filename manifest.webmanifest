@@ -1,6 +1,6 @@
 {
-  "name": "Pigging Planner",
-  "short_name": "Pigging",
+  "name": "Markers by Bas — Windows Web App",
+  "short_name": "Windows Web App",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0d0d0d",
