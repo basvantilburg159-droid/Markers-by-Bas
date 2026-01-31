@@ -243,7 +243,8 @@
     return String(raw).trim().replace(/[^a-z0-9-_ ]/gi, '').replace(/\s+/g, '_').slice(0, 64);
   };
 
-  const getSyncDocId = () => sanitizeDocId(state.syncId || state.project || '');
+  const getCloudSyncName = () => (cloudFileNameEl ? cloudFileNameEl.value.trim() : '');
+  const getSyncDocId = () => sanitizeDocId(getCloudSyncName() || state.syncId || state.project || '');
 
   const initFirebase = () => {
     if (!window.firebase || !window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.projectId) return false;
@@ -3438,12 +3439,14 @@
   };
   if (cloudFileNameEl) cloudFileNameEl.oninput = () => {
     localStorage.setItem(cloudNameKey, cloudFileNameEl.value.trim());
+    if (state.syncEnabled) startSync();
   };
   if (cloudFilesListEl) cloudFilesListEl.onchange = () => {
     const selectedOption = cloudFilesListEl.options[cloudFilesListEl.selectedIndex];
     if (selectedOption && cloudFileNameEl) {
       cloudFileNameEl.value = selectedOption.dataset.name || selectedOption.value || '';
       localStorage.setItem(cloudNameKey, cloudFileNameEl.value.trim());
+      if (state.syncEnabled) startSync();
     }
   };
   if (cloudSaveBtn) cloudSaveBtn.onclick = saveCloudFile;
