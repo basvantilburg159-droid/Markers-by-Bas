@@ -151,6 +151,7 @@
   const displayEpsgSelect = document.getElementById('displayEpsg');
   const displayEpsgRow = document.getElementById('displayEpsgRow');
   const optionsPanelBody = document.getElementById('optionsPanelBody');
+  const cloudSyncDock = document.getElementById('cloudSyncDock');
 
   const defaultState = () => ({
     project: 'New Run',
@@ -179,14 +180,15 @@
     userName: '',
     syncEnabled: false,
     pts: [
-      { n: 'Launcher', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
-      { n: 'M1', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
-      { n: 'M2', d: 0, t: '', missed: false, lat: null, lon: null, alt: null },
-      { n: 'Receiver', d: 0, t: '', missed: false, lat: null, lon: null, alt: null }
+      { markername: 'Launcher', distance: 0, time: '', missed: false, latitude: null, longitude: null, altitude: null },
+      { markername: 'M1', distance: 0, time: '', missed: false, latitude: null, longitude: null, altitude: null },
+      { markername: 'M2', distance: 0, time: '', missed: false, latitude: null, longitude: null, altitude: null },
+      { markername: 'Receiver', distance: 0, time: '', missed: false, latitude: null, longitude: null, altitude: null }
     ]
   });
 
   let state = defaultState();
+  const androidMode = false;
 
   const saveLocal = () => {
     localStorage.setItem('pigging-state', JSON.stringify(state));
@@ -211,27 +213,20 @@
     state.pipeSize = state.pipeSize ?? '';
     state.pipeWt = state.pipeWt ?? '';
     state.pipeWtAuto = state.pipeWtAuto !== false;
-    state.pts = (state.pts || []).map((p, idx) => ({
-      n: p.n || `M${idx}`,
-      d: Number(p.d) || 0,
-      t: p.t || '',
-      missed: !!p.missed,
-      lat: p.lat ?? null,
-      lon: p.lon ?? null,
-      alt: p.alt ?? null,
-      lastBy: p.lastBy || ''
-    }));
+    state.pts = normalizePoints(state.pts);
   };
 
   const normalizePoints = (pts = []) => (pts || []).map((p, idx) => ({
-    n: p.n || `M${idx}`,
-    d: Number(p.d) || 0,
-    t: p.t || '',
+    markername: p.markername || `M${idx}`,
+    distance: Number(p.distance) || 0,
+    time: p.time || '',
     missed: !!p.missed,
-    lat: p.lat ?? null,
-    lon: p.lon ?? null,
-    alt: p.alt ?? null,
-    lastBy: p.lastBy || ''
+    latitude: p.latitude ?? null,
+    longitude: p.longitude ?? null,
+    altitude: p.altitude ?? null,
+    lastby: p.lastby || '',
+    expectedtime: p.expectedtime || '',
+    expecteddate: p.expecteddate || ''
   }));
 
   const getCurrentUserName = () => {
@@ -276,8 +271,10 @@
 
   let firestoreDb = null;
   let syncUnsub = null;
+  let cloudFileUnsub = null;
   let isApplyingRemote = false;
   let lastRemoteTs = 0;
+  let lastCloudRemoteTs = 0;
   let syncTimer = null;
 
   const cloudNameKey = 'pigging-cloud-file-name';
@@ -288,6 +285,7 @@
   let firebaseAuth = null;
   let firebaseAuthReady = false;
   let firebaseAuthPromise = null;
+  let cloudListTimer = null;
 
   const setCloudStatus = (msg) => {
     if (cloudStatusEl) cloudStatusEl.textContent = msg || '';
@@ -351,6 +349,19 @@
     return ready;
   };
 
+  const startCloudListPolling = () => {
+    if (cloudListTimer) return;
+    cloudListTimer = setInterval(() => {
+      if (state.onlineMode && onlineAuthed) loadCloudList();
+    }, 8000);
+  };
+
+  const stopCloudListPolling = () => {
+    if (!cloudListTimer) return;
+    clearInterval(cloudListTimer);
+    cloudListTimer = null;
+  };
+
   const setFirebaseStatus = (isOk) => {
     if (!firebaseStatusDot) return;
     firebaseStatusDot.classList.toggle('ok', !!isOk);
@@ -408,24 +419,38 @@
   };
 
   const loadCloudList = () => {
-    if (!cloudFilesListEl) return;
+    if (!cloudFilesListEl) return Promise.resolve(false);
     if (!state.onlineMode || !onlineAuthed) {
       setCloudStatus('Login required for cloud sync.');
-      return;
+      return Promise.resolve(false);
     }
     setCloudStatus('Loading cloud list...');
-    ensureAuthReady()
-      .then(() => firestoreDb.collection('markerfiles').orderBy('updatedAt', 'desc').limit(200).get())
+    return ensureAuthReady()
+      .then(() => firestoreDb.collection('markerfiles').orderBy('updatedAt', 'desc').limit(200).get({ source: 'server' }))
       .then((snap) => {
         const options = buildCloudOptions(snap);
+        if (options.length === 0) {
+          return firestoreDb.collection('markerfiles').limit(200).get({ source: 'server' })
+            .then((fallbackSnap) => buildCloudOptions(fallbackSnap));
+        }
+        return options;
+      })
+      .then((options) => {
         renderCloudOptions(
           cloudFilesListEl,
           options,
           options.length ? 'Select a cloud file' : 'No cloud files yet'
         );
-        setCloudStatus(`Loaded ${options.length} cloud file${options.length === 1 ? '' : 's'}.`);
+        setCloudStatus(options.length
+          ? `Loaded ${options.length} cloud file${options.length === 1 ? '' : 's'}.`
+          : 'No cloud files found.');
+        return options.length > 0;
       })
-      .catch(() => setCloudStatus('Failed to load cloud list.'));
+      .catch((err) => {
+        const msg = err && err.message ? err.message : 'Failed to load cloud list.';
+        setCloudStatus(msg);
+        return false;
+      });
   };
 
   const loadCloudProjectList = () => {
@@ -451,6 +476,66 @@
 
   const getCloudNameInput = () => (cloudFileNameEl ? cloudFileNameEl.value.trim() : '');
 
+  const stopCloudFileListener = () => {
+    if (cloudFileUnsub) cloudFileUnsub();
+    cloudFileUnsub = null;
+  };
+
+  const startCloudFileListener = (docId) => {
+    if (!state.onlineMode || !onlineAuthed) return;
+    if (!docId || !firestoreDb) return;
+    stopCloudFileListener();
+    const ref = firestoreDb.collection('markerfiles').doc(docId);
+    cloudFileUnsub = ref.onSnapshot((snap) => {
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      if (data.clientId === clientId) return;
+      const ts = Number(data.updatedAt || 0);
+      if (ts && ts <= lastCloudRemoteTs) return;
+      if (!data.state) return;
+      const prevOnlineMode = state.onlineMode;
+      const prevUserName = state.userName;
+      const prevSyncEnabled = state.syncEnabled;
+      state = data.state;
+      normalizeState();
+      state.onlineMode = prevOnlineMode;
+      state.userName = prevUserName || state.userName;
+      state.syncEnabled = prevSyncEnabled;
+      render();
+      saveLocal();
+      lastCloudRemoteTs = ts || Date.now();
+      if (cloudFileNameEl) cloudFileNameEl.value = data.name || docId;
+      localStorage.setItem(cloudNameKey, data.name || docId);
+      setCloudStatus('Cloud file updated.');
+    });
+  };
+
+  function applyExpectedPassingTimes(currentState = state) {
+    const vRaw = calcSpeed();
+    const v = vRaw ? vRaw / 3600 : null;
+    let ref = toSec(currentState.launch);
+    const pts = (currentState.pts || []).map((p, i) => {
+      const expectedTime = ref && v ? toTime(ref) : '';
+      const expectedDate = currentState.launchDate ? formatDateFromSeconds(ref, currentState.launchDate) : '';
+      const distToNext = Number(p.distance || 0);
+      if (p.time && !p.missed) ref = toSec(p.time);
+      if (i < currentState.pts.length - 1 && v) ref += distToNext / v;
+      return {
+        ...p,
+        expectedtime: expectedTime,
+        expecteddate: expectedDate
+      };
+    });
+    return {
+      ...currentState,
+      pts
+    };
+  }
+
+  function buildExportState(currentState = state) {
+    return applyExpectedPassingTimes(currentState);
+  }
+
   const saveCloudFile = () => {
     if (!state.onlineMode || !onlineAuthed) {
       setCloudStatus('Login required for cloud sync.');
@@ -465,10 +550,11 @@
     if (cloudFileNameEl) cloudFileNameEl.value = name;
     localStorage.setItem(cloudNameKey, name);
     setCloudStatus('Saving to cloud...');
+    const stateForCloud = buildExportState(state);
     ensureAuthReady()
       .then(() => firestoreDb.collection('markerfiles').doc(docId).set({
         name,
-        state,
+        state: stateForCloud,
         updatedAt: Date.now(),
         clientId
       }, { merge: true }))
@@ -528,6 +614,7 @@
         saveLocal();
         if (cloudFileNameEl) cloudFileNameEl.value = data.name || docId;
         localStorage.setItem(cloudNameKey, data.name || docId);
+        startCloudFileListener(docId);
         statusSetter('Loaded from cloud.');
       })
       .catch(() => statusSetter('Failed to load cloud file.'));
@@ -1328,20 +1415,31 @@
       if (displayEpsgSelect) displayEpsgSelect.value = state.displayEpsg || 'EPSG:4326';
       if (timeEl) {
         const hasExp = ref != null && !!v;
-        timeEl.textContent = hasExp ? toTime(ref) : '';
+        const expectedTime = hasExp ? toTime(ref) : '';
+        const expectedDate = hasExp ? formatDateFromSeconds(ref, state.launchDate) : '';
+        timeEl.textContent = expectedTime;
         const dateEl = table.querySelector(`[data-exp-date="${i}"]`);
-        if (dateEl) dateEl.textContent = hasExp ? formatDateFromSeconds(ref, state.launchDate) : '';
+        if (dateEl) dateEl.textContent = expectedDate;
+        p.expectedtime = expectedTime;
+        p.expecteddate = expectedDate;
       }
       if (volEl) volEl.textContent = expVol;
-      if (p.t && !p.missed) ref = toSec(p.t);
-      if (i < state.pts.length - 1 && v) ref += Number(p.d || 0) / v;
-      total += Number(p.d || 0);
+      if (p.time && !p.missed) ref = toSec(p.time);
+      if (i < state.pts.length - 1 && v) ref += Number(p.distance || 0) / v;
+      total += Number(p.distance || 0);
     });
   };
 
   const render = () => {
     const operatorMode = isOperatorMode();
-    const editLocked = isEditLocked();
+    const editLocked = isEditLocked() || androidMode;
+    const showCoords = state.showCoords && !androidMode;
+    const showNavigate = state.showNavigate && !androidMode;
+    const showLastModified = state.showLastModified && !androidMode;
+    const showTotals = !androidMode;
+    const showExpVol = !androidMode;
+    const showDelete = !androidMode;
+    document.body.dataset.android = androidMode ? '1' : '';
 
     projectEl.value = state.project;
     if (clientEl) clientEl.value = state.client || '';
@@ -1413,43 +1511,62 @@
     if (clientEl) clientEl.disabled = editLocked;
     if (pipeIdEl) pipeIdEl.disabled = editLocked;
     if (syncEnabledEl) syncEnabledEl.disabled = editLocked;
-    if (cloudFileNameEl) cloudFileNameEl.disabled = editLocked;
-    if (cloudFilesListEl) cloudFilesListEl.disabled = editLocked;
-    if (cloudSaveBtn) cloudSaveBtn.disabled = editLocked;
-    if (cloudLoadBtn) cloudLoadBtn.disabled = editLocked;
-    if (cloudDeleteBtn) cloudDeleteBtn.disabled = editLocked;
-    if (cloudRefreshBtn) cloudRefreshBtn.disabled = editLocked;
+    if (cloudFileNameEl) cloudFileNameEl.disabled = editLocked || androidMode;
+    if (cloudFilesListEl) cloudFilesListEl.disabled = editLocked && !androidMode;
+    if (cloudSaveBtn) cloudSaveBtn.disabled = editLocked || androidMode;
+    if (cloudLoadBtn) cloudLoadBtn.disabled = editLocked && !androidMode;
+    if (cloudDeleteBtn) cloudDeleteBtn.disabled = editLocked || androidMode;
+    if (cloudRefreshBtn) cloudRefreshBtn.disabled = editLocked && !androidMode;
+    if (androidMode) {
+      if (cloudFilesListEl) cloudFilesListEl.disabled = false;
+      if (cloudLoadBtn) cloudLoadBtn.disabled = false;
+      if (cloudRefreshBtn) cloudRefreshBtn.disabled = false;
+      if (cloudFilesListEl) cloudFilesListEl.removeAttribute('disabled');
+      if (cloudLoadBtn) cloudLoadBtn.removeAttribute('disabled');
+      if (cloudRefreshBtn) cloudRefreshBtn.removeAttribute('disabled');
+    }
     if (themeToggle) themeToggle.checked = state.theme === 'dark';
-    if (optionsToggle) optionsToggle.checked = state.showOptions;
+    if (optionsToggle) optionsToggle.checked = state.showOptions && !androidMode;
     if (onlineToggle) onlineToggle.checked = !!state.onlineMode;
     document.body.dataset.theme = state.theme;
-    if (optionsPanelBody) optionsPanelBody.style.display = state.showOptions ? '' : 'none';
+    if (optionsPanelBody) optionsPanelBody.style.display = (state.showOptions && !androidMode) ? '' : 'none';
+    if (cloudSyncDock && cloudSyncBlock && androidMode) {
+      if (cloudSyncBlock.parentElement !== cloudSyncDock) cloudSyncDock.appendChild(cloudSyncBlock);
+      cloudSyncDock.style.display = '';
+    }
+    if (androidMode && statusEl) statusEl.style.display = 'none';
+    if (cloudStatus) cloudStatus.style.display = androidMode ? '' : 'none';
+    if (androidMode && state.onlineMode && onlineAuthed && cloudFilesListEl && cloudFilesListEl.options.length === 0) {
+      loadCloudList().then((hasItems) => {
+        if (!hasItems) setTimeout(() => loadCloudList(), 800);
+      });
+    }
     if (cloudSyncBlock) cloudSyncBlock.style.display = (state.onlineMode && onlineAuthed) ? '' : 'none';
     if (onlineUserLabel) {
       onlineUserLabel.textContent = (state.onlineMode && onlineAuthed && state.userName)
         ? `Online user: ${state.userName}`
         : '';
     }
-    if (importXlsxBtn) importXlsxBtn.disabled = operatorMode;
-    if (gpsBtn) gpsBtn.disabled = operatorMode;
-    if (gpsCsvBtn) gpsCsvBtn.disabled = operatorMode;
-    if (exportBtn) exportBtn.disabled = operatorMode;
-    if (exportExcelBtn) exportExcelBtn.disabled = operatorMode;
-    if (exportKmzBtn) exportKmzBtn.disabled = operatorMode;
-    if (graphsBtn) graphsBtn.disabled = operatorMode;
-    if (displayEpsgSelect) displayEpsgSelect.disabled = operatorMode;
-    if (loadJsonBtn) loadJsonBtn.disabled = false;
-    if (saveJsonBtn) saveJsonBtn.disabled = false;
+    if (importXlsxBtn) importXlsxBtn.disabled = operatorMode || androidMode;
+    if (gpsBtn) gpsBtn.disabled = operatorMode || androidMode;
+    if (gpsCsvBtn) gpsCsvBtn.disabled = operatorMode || androidMode;
+    if (exportBtn) exportBtn.disabled = operatorMode || androidMode;
+    if (exportExcelBtn) exportExcelBtn.disabled = operatorMode || androidMode;
+    if (exportKmzBtn) exportKmzBtn.disabled = operatorMode || androidMode;
+    if (graphsBtn) graphsBtn.disabled = operatorMode || androidMode;
+    if (displayEpsgSelect) displayEpsgSelect.disabled = operatorMode || androidMode;
+    if (loadJsonBtn) loadJsonBtn.disabled = androidMode;
+    if (saveJsonBtn) saveJsonBtn.disabled = androidMode;
     // Marker inputs honor lock except actual passing times
 
     if (modeSelectEl) modeSelectEl.value = state.mode || 'manual';
 
     const displayEpsg = state.displayEpsg || 'EPSG:4326';
     if (displayEpsgSelect) displayEpsgSelect.value = displayEpsg;
-    if (displayCoordsBtn) displayCoordsBtn.textContent = state.showCoords ? 'Hide coordinates' : 'Show coordinates';
-    if (displayEpsgRow) displayEpsgRow.style.display = state.showCoords ? '' : 'none';
-    if (toggleNavBtn) toggleNavBtn.textContent = state.showNavigate ? 'Google Maps on' : 'Google Maps off';
-    if (toggleLastModifiedBtn) toggleLastModifiedBtn.textContent = state.showLastModified ? 'Last modified on' : 'Last modified';
+    if (displayCoordsBtn) displayCoordsBtn.textContent = showCoords ? 'Hide coordinates' : 'Show coordinates';
+    if (displayEpsgRow) displayEpsgRow.style.display = showCoords ? '' : 'none';
+    if (toggleNavBtn) toggleNavBtn.textContent = showNavigate ? 'Google Maps on' : 'Google Maps off';
+    if (toggleLastModifiedBtn) toggleLastModifiedBtn.textContent = showLastModified ? 'Last modified on' : 'Last modified';
 
     const coordMeta = (() => {
       const code = displayEpsg.toUpperCase();
@@ -1457,8 +1574,8 @@
         return {
           headers: ['X (m)', 'Y (m)', 'Height (m)'],
           build: (p) => {
-            const proj = projectForEpsg(p.lat, p.lon, code);
-            return [proj.x, proj.y, p.alt != null ? p.alt : ''];
+            const proj = projectForEpsg(p.latitude, p.longitude, code);
+            return [proj.x, proj.y, p.altitude != null ? p.altitude : ''];
           }
         };
       }
@@ -1466,8 +1583,8 @@
         return {
           headers: ['RD X (m)', 'RD Y (m)', 'Height (m)'],
           build: (p) => {
-            const proj = projectForEpsg(p.lat, p.lon, code);
-            return [proj.x, proj.y, p.alt != null ? p.alt : ''];
+            const proj = projectForEpsg(p.latitude, p.longitude, code);
+            return [proj.x, proj.y, p.altitude != null ? p.altitude : ''];
           }
         };
       }
@@ -1475,32 +1592,32 @@
         return {
           headers: ['East (m)', 'North (m)', 'Zone', 'Height (m)'],
           build: (p) => {
-            const proj = projectForEpsg(p.lat, p.lon, code);
-            return [proj.x, proj.y, proj.zone, p.alt != null ? p.alt : ''];
+            const proj = projectForEpsg(p.latitude, p.longitude, code);
+            return [proj.x, proj.y, proj.zone, p.altitude != null ? p.altitude : ''];
           }
         };
       }
       return {
         headers: ['Lat', 'Lon', 'Height (m)'],
-        build: (p) => [p.lat != null ? p.lat.toFixed(6) : '', p.lon != null ? p.lon.toFixed(6) : '', p.alt != null ? p.alt : '']
+        build: (p) => [p.latitude != null ? p.latitude.toFixed(6) : '', p.longitude != null ? p.longitude.toFixed(6) : '', p.altitude != null ? p.altitude : '']
       };
     })();
 
-    const coordHeader = state.showCoords ? coordMeta.headers.map((h) => `<th>${h}</th>`).join('') : '';
-    const lastModifiedHeader = state.showLastModified ? '<th>Last modified</th>' : '';
+    const coordHeader = showCoords ? coordMeta.headers.map((h) => `<th>${h}</th>`).join('') : '';
+    const lastModifiedHeader = showLastModified ? '<th>Last modified</th>' : '';
 
     table.innerHTML = `
       <tr>
         <th>Marker name</th>
         <th>Distance between markers (m)</th>
-        <th>Total (m)</th>
+        ${showTotals ? '<th>Total (m)</th>' : ''}
         ${coordHeader}
-        <th>Expected volume (m³)</th>
+        ${showExpVol ? '<th>Expected volume (m³)</th>' : ''}
         <th>Expected time</th>
         <th>Actual passing (hh:mm:ss)</th>
         ${lastModifiedHeader}
-        ${state.showNavigate ? '<th>Google Maps</th>' : ''}
-        <th></th>
+        ${showNavigate ? '<th>Google Maps</th>' : ''}
+        ${showDelete ? '<th></th>' : ''}
       </tr>`;
 
     let total = 0;
@@ -1509,38 +1626,45 @@
     state.pts.forEach((p, i) => {
       const expVol = Number.isFinite(effectiveVol) ? ((total * Number(effectiveVol)) / 1000).toFixed(1) : '';
 
-      const coordCells = state.showCoords ? coordMeta.build(p, displayEpsg) : [];
+      const coordCells = showCoords ? coordMeta.build(p, displayEpsg) : [];
 
       const row = table.insertRow();
-      const hasCoords = Number.isFinite(p.lat) && Number.isFinite(p.lon);
-      const navUrl = hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}` : '';
+      const hasCoords = Number.isFinite(p.latitude) && Number.isFinite(p.longitude);
+      const navUrl = hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}` : '';
       row.innerHTML = `
-        <td><input value="${p.n}" ${editLocked ? 'disabled' : ''} data-name="${i}"></td>
+        <td><input value="${p.markername}" ${editLocked ? 'disabled' : ''} data-name="${i}"></td>
         <td></td>
-        <td>${total}</td>
+        ${showTotals ? `<td>${total}</td>` : ''}
         ${coordCells.map((c) => `<td>${c ?? ''}</td>`).join('')}
-        <td><span data-exp-vol="${i}">${expVol}</span></td>
-        <td><span data-exp-time="${i}">${ref && v ? toTime(ref) : ''}</span> <span class="hint" data-exp-date="${i}">${ref && v ? formatDateFromSeconds(ref, state.launchDate) : ''}</span></td>
+        ${showExpVol ? `<td><span data-exp-vol="${i}">${expVol}</span></td>` : ''}
+        <td><span data-exp-time="${i}">${ref && v ? toTime(ref) : ''}</span> ${androidMode ? '' : `<span class="hint" data-exp-date="${i}">${ref && v ? formatDateFromSeconds(ref, state.launchDate) : ''}</span>`}</td>
         <td>
-          ${p.missed && i > 0 && i < state.pts.length - 1 ? `<span class="missed">Not detected</span>` : `<input type="time" step="1" value="${p.t}" data-time="${i}">`}
+          ${p.missed && i > 0 && i < state.pts.length - 1 ? `<span class="missed">Not detected</span>` : `<input type="time" step="1" value="${p.time}" data-time="${i}">`}
           ${i > 0 && i < state.pts.length - 1 ? `<button class="small secondary" data-missed="${i}">Not detected</button>` : ''}
         </td>
-        ${state.showLastModified ? `<td>${p.lastBy || ''}</td>` : ''}
-        ${state.showNavigate ? `<td>${hasCoords ? `<a class="small secondary" href="${navUrl}" target="_blank" rel="noopener">Open</a>` : ''}</td>` : ''}
-          <td>${i > 0 && i < state.pts.length - 1 ? `<button class="small" data-del="${i}" aria-label="Remove" ${editLocked ? 'disabled' : ''}>🗑</button>` : ''}</td>`;
+        ${showLastModified ? `<td>${p.lastby || ''}</td>` : ''}
+        ${showNavigate ? `<td>${hasCoords ? `<a class="small secondary" href="${navUrl}" target="_blank" rel="noopener">Open</a>` : ''}</td>` : ''}
+          ${showDelete ? `<td>${i > 0 && i < state.pts.length - 1 ? `<button class="small" data-del="${i}" aria-label="Remove" ${editLocked ? 'disabled' : ''}>🗑</button>` : ''}</td>` : ''}`;
 
-      if (p.t && !p.missed) ref = toSec(p.t);
+      if (p.time && !p.missed) ref = toSec(p.time);
 
       if (i < state.pts.length - 1) {
         const seg = table.insertRow();
-        const coordCount = state.showCoords ? coordMeta.headers.length : 0;
-        const remainingCols = coordCount + (state.showNavigate ? 6 : 5) + (state.showLastModified ? 1 : 0);
+        const coordCount = showCoords ? coordMeta.headers.length : 0;
+        const remainingCols = (showTotals ? 1 : 0)
+          + coordCount
+          + (showExpVol ? 1 : 0)
+          + 1
+          + 1
+          + (showLastModified ? 1 : 0)
+          + (showNavigate ? 1 : 0)
+          + (showDelete ? 1 : 0);
         seg.innerHTML = `
-          <td>to ${state.pts[i + 1].n}</td>
-          <td><input value="${p.d}" ${editLocked ? 'disabled' : ''} data-dist="${i}"></td>
+          <td>to ${state.pts[i + 1].markername}</td>
+          <td><input value="${p.distance}" ${editLocked ? 'disabled' : ''} data-dist="${i}"></td>
           <td colspan="${remainingCols}"></td>`;
-        if (ref && v) ref += Number(p.d || 0) / v;
-        total += Number(p.d || 0);
+        if (ref && v) ref += Number(p.distance || 0) / v;
+        total += Number(p.distance || 0);
       }
     });
 
@@ -1571,9 +1695,9 @@
       distCum[i] = total;
       expVolCum[i] = Number.isFinite(effectiveVol) ? ((total * Number(effectiveVol)) / 1000) : null;
       if (i < pts.length - 1 && v) {
-        ref += Number(p.d || 0) / v;
+        ref += Number(p.distance || 0) / v;
       }
-      total += Number(p.d || 0);
+      total += Number(p.distance || 0);
     });
 
     // Actual times per marker with day rollovers handled sequentially (use last actual, not just previous index)
@@ -1581,8 +1705,8 @@
     let dayOffset = 0;
     let lastActual = null;
     pts.forEach((p, i) => {
-      if (p.t && !p.missed) {
-        let t = toSec(p.t) + dayOffset;
+      if (p.time && !p.missed) {
+        let t = toSec(p.time) + dayOffset;
         if (lastActual != null && t <= lastActual) {
           // push to next day until strictly later than last actual
           while (t <= lastActual) {
@@ -1603,9 +1727,9 @@
     for (let i = 1; i < pts.length; i++) {
       const t1 = actualSec[i - 1];
       const t2 = actualSec[i];
-      const d = Number(pts[i - 1].d || 0);
+      const d = Number(pts[i - 1].distance || 0);
       const speed = (t1 != null && t2 != null && t2 > t1) ? (d / (t2 - t1)) * 3600 : null;
-      segLabels.push(`${pts[i - 1].n}→${pts[i].n}`);
+      segLabels.push(`${pts[i - 1].markername}→${pts[i].markername}`);
       segSpeeds.push(speed);
     }
 
@@ -1614,12 +1738,12 @@
     const segDurationActual = [];
     const segDurationExpected = [];
     for (let i = 1; i < pts.length; i++) {
-      const d = Number(pts[i - 1].d || 0);
+      const d = Number(pts[i - 1].distance || 0);
       const expected = v ? d / v : null;
       const t1 = actualSec[i - 1];
       const t2 = actualSec[i];
       const actual = (t1 != null && t2 != null && t2 > t1) ? (t2 - t1) : null;
-      segDurationLabels.push(`${pts[i - 1].n}→${pts[i].n}`);
+      segDurationLabels.push(`${pts[i - 1].markername}→${pts[i].markername}`);
       segDurationActual.push(actual != null ? actual / 60 : null);
       segDurationExpected.push(expected != null ? expected / 60 : null);
     }
@@ -1643,7 +1767,7 @@
     const devValues = [];
     pts.forEach((p, i) => {
       if (actualSec[i] != null && expCum[i] != null) {
-        devLabels.push(p.n);
+        devLabels.push(p.markername);
         devValues.push((actualSec[i] - expCum[i]) / 60); // minutes
       }
     });
@@ -1933,18 +2057,18 @@
       const expTime = ref && v ? toTime(ref) : '';
       const expDate = includeDates ? formatDateFromSeconds(ref, state.launchDate) : '';
       const expVol = Number.isFinite(effectiveVol) ? ((total * Number(effectiveVol)) / 1000).toFixed(1) : '';
-      const actual = p.missed ? 'Missed' : (p.t || '');
-      const hasCoord = includeCoords && p.lat != null && p.lon != null;
-      const coord = hasCoord ? formatCoordForEpsg(p.lat, p.lon, epsgCode) : '';
-      const proj = hasCoord ? projectForEpsg(p.lat, p.lon, epsgCode) : { x: '', y: '', zone: '' };
-      const latVal = hasCoord ? p.lat.toFixed(6) : '';
-      const lonVal = hasCoord ? p.lon.toFixed(6) : '';
-      const altVal = includeCoords && p.alt != null ? Number(p.alt).toFixed(2) : '';
-      const distToNext = Number(p.d || 0);
+      const actual = p.missed ? 'Missed' : (p.time || '');
+      const hasCoord = includeCoords && p.latitude != null && p.longitude != null;
+      const coord = hasCoord ? formatCoordForEpsg(p.latitude, p.longitude, epsgCode) : '';
+      const proj = hasCoord ? projectForEpsg(p.latitude, p.longitude, epsgCode) : { x: '', y: '', zone: '' };
+      const latVal = hasCoord ? p.latitude.toFixed(6) : '';
+      const lonVal = hasCoord ? p.longitude.toFixed(6) : '';
+      const altVal = includeCoords && p.altitude != null ? Number(p.altitude).toFixed(2) : '';
+      const distToNext = Number(p.distance || 0);
 
       // Keep marker rows focused on totals; show distance only on the segment row that follows
       rows.push({
-        name: p.n || '',
+        name: p.markername || '',
         dist: '',
         total,
         coord,
@@ -1964,7 +2088,7 @@
       if (i < state.pts.length - 1) {
         const next = state.pts[i + 1];
         rows.push({
-          name: `to ${next?.n || ''}`,
+          name: `to ${next?.markername || ''}`,
           dist: distToNext,
           total: '',
           coord: '',
@@ -1980,7 +2104,7 @@
         });
       }
 
-      if (p.t && !p.missed) ref = toSec(p.t);
+      if (p.time && !p.missed) ref = toSec(p.time);
       if (i < state.pts.length - 1 && v) ref += distToNext / v;
       total += distToNext;
     });
@@ -2032,17 +2156,17 @@
 
   const buildKmzWorking = () => {
     kmzWorking = state.pts.map((p, idx) => {
-      const hasCoord = Number.isFinite(p.lat) && Number.isFinite(p.lon);
+      const hasCoord = Number.isFinite(p.latitude) && Number.isFinite(p.longitude);
       return {
         idx,
-        name: p.n || `M${idx + 1}`,
-        description: p.n ? `Marker: ${p.n}` : '',
+        name: p.markername || `M${idx + 1}`,
+        description: p.markername ? `Marker: ${p.markername}` : '',
         include: hasCoord,
         hasCoord,
         symbol: kmzSymbols[0]?.id || 'ylw-pushpin',
-        lat: p.lat,
-        lon: p.lon,
-        alt: p.alt
+        lat: p.latitude,
+        lon: p.longitude,
+        alt: p.altitude
       };
     });
   };
@@ -2733,17 +2857,17 @@
         const expTime = ref && v ? toTime(ref) : '';
         const expDate = ref && v ? formatDateFromSeconds(ref, state.launchDate) : '';
         const expVol = Number.isFinite(effectiveVol) ? ((total * Number(effectiveVol)) / 1000).toFixed(1) : '';
-        const actual = p.missed ? '' : (p.t || '');
+        const actual = p.missed ? '' : (p.time || '');
         const missed = p.missed ? 'Yes' : '';
-        const hasCoord = p.lat != null && p.lon != null;
-        const latVal = hasCoord ? p.lat.toFixed(6) : '';
-        const lonVal = hasCoord ? p.lon.toFixed(6) : '';
-        const altVal = p.alt != null ? Number(p.alt).toFixed(2) : '';
+        const hasCoord = p.latitude != null && p.longitude != null;
+        const latVal = hasCoord ? p.latitude.toFixed(6) : '';
+        const lonVal = hasCoord ? p.longitude.toFixed(6) : '';
+        const altVal = p.altitude != null ? Number(p.altitude).toFixed(2) : '';
         const projVal = (v) => (Number.isFinite(v) ? Number(v).toFixed(2) : '');
 
         const row = [
-          p.n || '',
-          Number(p.d || 0),
+          p.markername || '',
+          Number(p.distance || 0),
           total
         ];
 
@@ -2759,13 +2883,13 @@
             if (code === 'EPSG:4326') {
               row.push(latVal, lonVal);
             } else if (code === 'EPSG:3857') {
-              const proj = projectForEpsg(p.lat, p.lon, 'EPSG:3857');
+              const proj = projectForEpsg(p.latitude, p.longitude, 'EPSG:3857');
               row.push(projVal(proj.x), projVal(proj.y));
             } else if (code === 'EPSG:28992') {
-              const proj = projectForEpsg(p.lat, p.lon, 'EPSG:28992');
+              const proj = projectForEpsg(p.latitude, p.longitude, 'EPSG:28992');
               row.push(projVal(proj.x), projVal(proj.y));
             } else if (code === 'UTM') {
-              const proj = projectForEpsg(p.lat, p.lon, 'UTM');
+              const proj = projectForEpsg(p.latitude, p.longitude, 'UTM');
               row.push(projVal(proj.x), projVal(proj.y), proj.zone || '');
             }
           });
@@ -2780,9 +2904,9 @@
 
         rows.push(row);
 
-        if (p.t && !p.missed) ref = toSec(p.t);
-        if (i < state.pts.length - 1 && v) ref += Number(p.d || 0) / v;
-        total += Number(p.d || 0);
+        if (p.time && !p.missed) ref = toSec(p.time);
+        if (i < state.pts.length - 1 && v) ref += Number(p.distance || 0) / v;
+        total += Number(p.distance || 0);
       });
 
       const wb = XLSX.utils.book_new();
@@ -2823,8 +2947,8 @@
   const markPassNow = (idx) => {
     if (state.locked) return;
     const now = new Date();
-    state.pts[idx].t = toTime(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
-    state.pts[idx].lastBy = getCurrentUserName();
+    state.pts[idx].time = toTime(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
+    state.pts[idx].lastby = getCurrentUserName();
     render();
     scheduleSyncSave();
   };
@@ -2832,7 +2956,7 @@
   const addMarker = () => {
     if (isEditLocked()) return;
     const idx = state.pts.length - 1;
-    state.pts.splice(idx, 0, { n: `M${idx}`, d: 0, t: '', missed: false, lat: null, lon: null, lastBy: getCurrentUserName() });
+    state.pts.splice(idx, 0, { markername: `M${idx}`, distance: 0, time: '', missed: false, latitude: null, longitude: null, lastby: getCurrentUserName() });
     render();
   };
 
@@ -2855,10 +2979,10 @@
     if (!lines.length) return;
     state.pts = lines.map((l, i) => {
       const c = l.split(/\t| {2,}/);
-      return { n: c[0] ? c[0].trim() : `M${i + 1}`, d: Number(c[1]) || 0, t: '', missed: false, lat: null, lon: null };
+      return { markername: c[0] ? c[0].trim() : `M${i + 1}`, distance: Number(c[1]) || 0, time: '', missed: false, latitude: null, longitude: null };
     });
-    if (state.pts.length < 2) state.pts.push({ n: 'Receiver', d: 0, t: '', missed: false, lat: null, lon: null });
-    state.pts[state.pts.length - 1].d = 0;
+    if (state.pts.length < 2) state.pts.push({ markername: 'Receiver', distance: 0, time: '', missed: false, latitude: null, longitude: null });
+    state.pts[state.pts.length - 1].distance = 0;
     render();
     closeMarkerImport();
   };
@@ -2884,10 +3008,10 @@
         const name = String(r[0]).trim();
         const dist = Number(r[1]);
         if (!name || !Number.isFinite(dist)) continue;
-        pts.push({ n: name, d: dist, t: '', missed: false, lat: null, lon: null });
+        pts.push({ markername: name, distance: dist, time: '', missed: false, latitude: null, longitude: null });
       }
       if (pts.length < 2) throw new Error('Need at least two rows with name and distance');
-      pts[pts.length - 1].d = 0;
+      pts[pts.length - 1].distance = 0;
       state.pts = pts;
       render();
       statusEl.textContent = 'Imported markers from Excel.';
@@ -2952,8 +3076,13 @@
   };
 
   const saveJSON = async () => {
+    if (androidMode) {
+      if (statusEl) statusEl.textContent = 'Local save is disabled in Android mode.';
+      return;
+    }
     const name = buildExportBaseName() + '.json';
-    const data = JSON.stringify(state, null, 2);
+    const stateForExport = buildExportState(state);
+    const data = JSON.stringify(stateForExport, null, 2);
     if (window.showSaveFilePicker) {
       try {
         const h = await showSaveFilePicker({ suggestedName: name, types: [{ accept: { 'application/json': ['.json'] } }] });
@@ -2973,7 +3102,13 @@
     statusEl.textContent = 'Downloaded JSON.';
   };
 
-  const loadJSON = () => fileInput.click();
+  const loadJSON = () => {
+    if (androidMode) {
+      if (statusEl) statusEl.textContent = 'Local load is disabled in Android mode.';
+      return;
+    }
+    fileInput.click();
+  };
 
   let gpsCoords = null;
   let gpsSegments = null;
@@ -3217,7 +3352,7 @@
       const fallback = isFirst ? 'Launcher' : (isLast ? 'Receiver' : `M${idx}`);
       const name = p.name && p.name.trim() ? p.name.trim() : fallback;
       const dist = isLast ? 0 : Math.round(gpsSegments[idx] || 0);
-      return { n: name, d: dist, t: '', missed: false, lat: p.lat ?? null, lon: p.lon ?? null, alt: p.alt ?? null };
+      return { markername: name, distance: dist, time: '', missed: false, latitude: p.lat ?? null, longitude: p.lon ?? null, altitude: p.alt ?? null };
     });
     state.pts = pts;
     render();
@@ -3337,6 +3472,10 @@
   };
 
   fileInput.onchange = (e) => {
+    if (androidMode) {
+      if (statusEl) statusEl.textContent = 'Local load is disabled in Android mode.';
+      return;
+    }
     const f = e.target.files[0];
     if (!f) return;
     const r = new FileReader();
@@ -3730,8 +3869,16 @@
     render();
     saveLocal();
     startSync();
-    loadCloudList();
-    checkFirebaseConnection();
+    ensureAuthReady().finally(() => {
+      loadCloudList().then((hasItems) => {
+        if (androidMode && !hasItems) setTimeout(() => loadCloudList(), 800);
+      });
+      checkFirebaseConnection();
+    });
+    if (androidMode) startCloudListPolling();
+    if (cloudFilesListEl && cloudFilesListEl.value) {
+      loadCloudFile();
+    }
   };
 
   if (loginSubmit) loginSubmit.onclick = applyLogin;
@@ -3743,6 +3890,7 @@
     state.syncEnabled = false;
     if (syncEnabledEl) syncEnabledEl.checked = false;
     stopSync();
+    stopCloudListPolling();
     render();
     saveLocal();
   };
@@ -3832,6 +3980,10 @@
       state.onlineMode = !!onlineToggle.checked;
       state.syncEnabled = state.onlineMode;
       stopSync();
+      if (!state.onlineMode) {
+        stopCloudListPolling();
+        stopCloudFileListener();
+      }
       if (state.onlineMode) ensureFirebaseAuth();
       if (!state.onlineMode) {
         onlineAuthed = false;
@@ -3848,24 +4000,24 @@
     const t = e.target;
     if (t.dataset.name) {
       if (isEditLocked()) return;
-      state.pts[Number(t.dataset.name)].n = t.value;
-      state.pts[Number(t.dataset.name)].lastBy = getCurrentUserName();
+      state.pts[Number(t.dataset.name)].markername = t.value;
+      state.pts[Number(t.dataset.name)].lastby = getCurrentUserName();
       scheduleSyncSave();
       return; // defer render until commit
     }
     if (t.dataset.dist) {
       if (isEditLocked()) return;
-      state.pts[Number(t.dataset.dist)].d = Number(t.value) || 0;
-      state.pts[Number(t.dataset.dist)].lastBy = getCurrentUserName();
+      state.pts[Number(t.dataset.dist)].distance = Number(t.value) || 0;
+      state.pts[Number(t.dataset.dist)].lastby = getCurrentUserName();
       updateExpectations(); // keep expected times in sync while typing distances
       scheduleSyncSave();
       return; // render on commit
     }
     if (t.dataset.time) {
       const idx = Number(t.dataset.time);
-      state.pts[idx].t = t.value;
+      state.pts[idx].time = t.value;
       state.pts[idx].missed = false;
-      state.pts[idx].lastBy = getCurrentUserName();
+      state.pts[idx].lastby = getCurrentUserName();
       updateExpectations();
       scheduleSyncSave();
       return; // render on commit
@@ -3912,8 +4064,8 @@
       if (p) {
         const nowMissed = !p.missed;
         p.missed = nowMissed;
-        p.t = '';
-        p.lastBy = getCurrentUserName();
+        p.time = '';
+        p.lastby = getCurrentUserName();
         render();
         scheduleSyncSave();
       }
@@ -3951,7 +4103,7 @@
             }
           });
         });
-        statusEl.textContent = 'Offline cache ready.';
+        statusEl.textContent = '';
       } catch (e) {}
     }
   };
