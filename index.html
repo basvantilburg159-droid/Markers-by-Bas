@@ -41,6 +41,14 @@
     .short-input { width:150px; max-width:100%; }
     .conn-dot { width:10px; height:10px; border-radius:50%; display:inline-block; background:#f55; border:1px solid #333; box-shadow:0 0 6px rgba(0,0,0,0.35); }
     .conn-dot.ok { background:#2ecc71; }
+    .btn-heartbeat { width:8px; height:8px; border-radius:50%; display:none; background:#f55; border:1px solid #333; box-shadow:0 0 6px rgba(0,0,0,0.35); }
+    .btn-heartbeat.ok { background:#2ecc71; animation:heartbeat 1.2s ease-in-out infinite; }
+    .button-heartbeat { display:inline-flex; align-items:center; gap:6px; }
+    @keyframes heartbeat {
+      0% { transform:scale(1); box-shadow:0 0 0 0 rgba(46,204,113,0.7); }
+      70% { transform:scale(1.25); box-shadow:0 0 0 6px rgba(46,204,113,0); }
+      100% { transform:scale(1); box-shadow:0 0 0 0 rgba(46,204,113,0); }
+    }
     .cloud-sync-block { display:flex; flex-direction:column; gap:6px; min-width:200px; }
     .no-select { user-select:none; }
     input, textarea, select { background:#1c1c1c; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px 8px; }
@@ -224,6 +232,10 @@
             Launch date
             <input id="launchDate" type="date">
           </label>
+          <div id="cloudMeta" class="hint" style="font-size:11px; line-height:14px; display:none;">
+            <div>Cloud file: <span id="cloudMetaName">—</span></div>
+            <div>Last saved: <span id="cloudMetaSaved">—</span></div>
+          </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <div style="font-size:12px; color:var(--muted);">Display</div>
@@ -244,8 +256,8 @@
         <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
           <div style="font-size:12px; color:var(--muted);">Options</div>
           <button id="newProject">New project</button>
-          <button id="loadJson">Load markerlist</button>
-          <button id="saveJson">Save markerlist</button>
+          <button id="loadJson" class="button-heartbeat">Load markerlist <span id="loadJsonHeartbeat" class="btn-heartbeat" title="Offline"></span></button>
+          <button id="saveJson" class="button-heartbeat">Save markerlist <span id="saveJsonHeartbeat" class="btn-heartbeat" title="Offline"></span></button>
           <button id="addMarker">Add manual marker</button>
         </div>
         <div style="display:flex; flex-direction:column; gap:6px; min-width:140px;">
@@ -260,32 +272,7 @@
           <button id="exportXlsx">Export to Excel</button>
           <button id="exportPdf">Export to PDF</button>
           <button id="exportKmz">Export to KMZ</button>
-        </div>
-        <div id="cloudSyncBlock" class="cloud-sync-block">
-          <label class="cloud-name-row">
-            Cloud file name
-            <div style="display:flex; gap:8px; align-items:center;">
-              <input id="cloudFileName" placeholder="project-jan-31">
-              <button id="cloudCopyFormBtn" class="secondary small">Copy from form</button>
-              <button id="cloudSaveBtn" class="secondary small">Save to cloud</button>
-            </div>
-          </label>
-          <label>
-            Cloud files list
-            <select id="cloudFilesList" style="min-width:160px;"></select>
-          </label>
-          <div class="mini-row" style="margin-top:4px;">
-            <button id="cloudLoadBtn" class="secondary small">Load from cloud</button>
-            <button id="cloudDeleteBtn" class="secondary small">Delete</button>
-            <button id="cloudRefreshBtn" class="secondary small">Refresh list</button>
-          </div>
-          <div style="display:flex; align-items:center; gap:12px; margin-top:4px;">
-            <div style="display:flex; align-items:center; gap:8px; margin:0;">
-              <span style="font-size:13px; color:var(--text);">Realtime sync</span>
-              <span id="firebaseStatusDot" class="conn-dot" title="Firebase connection status"></span>
-            </div>
-            <div id="cloudStatus" class="hint" style="margin:0; display:none;">Cloud list not loaded.</div>
-          </div>
+          <button id="exportKmzCloud" class="secondary">Export to Cloud</button>
         </div>
         <span class="spacer"></span>
       </div>
@@ -299,6 +286,45 @@
 
   <input type="file" id="fileInput" hidden accept=".json">
   <input type="file" id="importXlsxInput" hidden accept=".xlsx,.xls,.csv">
+
+  <div id="cloudFileModal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:520px;">
+      <div class="modal-header">
+        <h3 style="margin:0; color:var(--accent);">Cloud files</h3>
+        <button id="cloudFileClose" class="secondary small">Close</button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <div id="cloudSyncBlock" class="cloud-sync-block">
+          <div id="cloudNameRow" class="cloud-name-row" style="display:flex; flex-direction:column; gap:6px;">
+            <div style="font-size:12px; color:var(--muted);">Cloud file name</div>
+            <div id="cloudSaveSection" class="mini-row" style="flex-wrap:wrap;">
+              <input id="cloudFileName" type="text" placeholder="Project_Client_Pipe_20260201_1355" style="min-width:200px;">
+              <button id="cloudSaveBtn" class="secondary small">Save to cloud</button>
+            </div>
+          </div>
+          <div id="cloudLoadSection" style="display:flex; flex-direction:column; gap:6px;">
+            <label>
+              Cloud files list
+              <select id="cloudFilesList" style="min-width:160px;"></select>
+            </label>
+            <div id="cloudLoadActions" class="mini-row" style="margin-top:4px;">
+              <button id="cloudLoadBtn" class="secondary small">Load from cloud</button>
+              <button id="cloudDeleteBtn" class="secondary small">Delete</button>
+              <button id="cloudRefreshBtn" class="secondary small">Refresh list</button>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:12px; margin-top:4px;">
+            <div style="display:flex; align-items:center; gap:8px; margin:0;">
+              <span style="font-size:13px; color:var(--text);">Realtime sync</span>
+              <span id="firebaseStatusDot" class="conn-dot" title="Firebase connection status"></span>
+            </div>
+            <div id="cloudStatus" class="hint" style="margin:0; display:none;">Cloud list not loaded.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="exportPreviewModal" class="modal">
     <div class="modal-backdrop"></div>

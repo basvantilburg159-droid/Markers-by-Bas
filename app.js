@@ -11,7 +11,6 @@
   const firebaseStatusDot = document.getElementById('firebaseStatusDot');
   const cloudSyncBlock = document.getElementById('cloudSyncBlock');
   const cloudFileNameEl = document.getElementById('cloudFileName');
-  const cloudCopyFormBtn = document.getElementById('cloudCopyFormBtn');
   const cloudFilesListEl = document.getElementById('cloudFilesList');
   const cloudSaveBtn = document.getElementById('cloudSaveBtn');
   const cloudLoadBtn = document.getElementById('cloudLoadBtn');
@@ -53,6 +52,8 @@
   const modeSelectEl = document.getElementById('modeSelect');
   const launchDateEl = document.getElementById('launchDate');
   const launchEl = document.getElementById('launch');
+  const cloudMetaName = document.getElementById('cloudMetaName');
+  const cloudMetaSaved = document.getElementById('cloudMetaSaved');
   const fileInput = document.getElementById('fileInput');
   const importXlsxBtn = document.getElementById('importXlsxBtn');
   const importXlsxInput = document.getElementById('importXlsxInput');
@@ -66,10 +67,19 @@
   const exportBtn = document.getElementById('exportPdf');
   const exportExcelBtn = document.getElementById('exportXlsx');
   const exportKmzBtn = document.getElementById('exportKmz');
+  const exportKmzCloudBtn = document.getElementById('exportKmzCloud');
   const newProjectBtn = document.getElementById('newProject');
   const addMarkerBtn = document.getElementById('addMarker');
   const loadJsonBtn = document.getElementById('loadJson');
   const saveJsonBtn = document.getElementById('saveJson');
+  const loadJsonHeartbeat = document.getElementById('loadJsonHeartbeat');
+  const saveJsonHeartbeat = document.getElementById('saveJsonHeartbeat');
+  const cloudFileModal = document.getElementById('cloudFileModal');
+  const cloudFileClose = document.getElementById('cloudFileClose');
+  const cloudLoadSection = document.getElementById('cloudLoadSection');
+  const cloudLoadActions = document.getElementById('cloudLoadActions');
+  const cloudSaveSection = document.getElementById('cloudSaveSection');
+  const cloudNameRow = document.getElementById('cloudNameRow');
   const exportExcelModal = document.getElementById('exportExcelModal');
   const exportExcelClose = document.getElementById('exportExcelClose');
   const exportExcelConfirm = document.getElementById('exportExcelConfirm');
@@ -192,15 +202,34 @@
 
   const saveLocal = () => {
     localStorage.setItem('pigging-state', JSON.stringify(state));
+    dirtyLocal = false;
   };
 
   const normalizeState = () => {
     if (!state) return;
+    const defaults = defaultState();
+    state.project = state.project ?? defaults.project;
+    state.client = state.client ?? defaults.client;
+    state.pipeId = state.pipeId ?? defaults.pipeId;
+    state.mode = state.mode ?? defaults.mode;
+    state.speed = state.speed ?? defaults.speed;
+    state.flow = state.flow ?? defaults.flow;
+    state.offset = state.offset ?? defaults.offset;
+    state.vol = state.vol ?? defaults.vol;
+    state.pipeSize = state.pipeSize ?? defaults.pipeSize;
+    state.pipeWt = state.pipeWt ?? defaults.pipeWt;
+    state.launchDate = state.launchDate ?? defaults.launchDate;
+    state.launch = state.launch ?? defaults.launch;
     state.showCoords = !!state.showCoords;
     state.launchDate = state.launchDate || '';
+    if (typeof state.launchDate === 'string' && /^\d{2}\/\d{2}\/\d{4}$/.test(state.launchDate)) {
+      const [dd, mm, yyyy] = state.launchDate.split('/');
+      state.launchDate = `${yyyy}-${mm}-${dd}`;
+    }
+    if (typeof state.launch === 'string' && /^\d{2}:\d{2}$/.test(state.launch)) {
+      state.launch = `${state.launch}:00`;
+    }
     state.displayEpsg = state.displayEpsg || 'EPSG:4326';
-    state.client = state.client || '';
-    state.pipeId = state.pipeId || '';
     state.userMode = state.userMode === 'operator' ? 'operator' : 'expert';
     state.showNavigate = state.showNavigate !== false;
     state.exportName = state.exportName || '';
@@ -276,6 +305,9 @@
   let lastRemoteTs = 0;
   let lastCloudRemoteTs = 0;
   let syncTimer = null;
+  let cloudSaveTimer = null;
+  let dirtyLocal = false;
+  let dirtyCloud = false;
 
   const cloudNameKey = 'pigging-cloud-file-name';
   const onlineUserKey = 'pigging-online-user';
@@ -286,9 +318,73 @@
   let firebaseAuthReady = false;
   let firebaseAuthPromise = null;
   let cloudListTimer = null;
+  let lastCloudSavedAt = null;
+  let cloudModalMode = 'load';
+  let pendingCloudState = null;
 
   const setCloudStatus = (msg) => {
     if (cloudStatusEl) cloudStatusEl.textContent = msg || '';
+  };
+
+  const setCloudFileName = (name) => {
+    const safeName = (name || '').trim();
+    if (cloudFileNameEl) cloudFileNameEl.value = safeName;
+    if (cloudMetaName) cloudMetaName.textContent = safeName || '—';
+  };
+
+  const updateCloudMetaSaved = (ts) => {
+    if (!cloudMetaSaved) return;
+    const dateObj = ts instanceof Date ? ts : (ts ? new Date(ts) : null);
+    cloudMetaSaved.textContent = dateObj ? dateObj.toLocaleString() : '—';
+  };
+
+  const buildCloudDefaultName = () => {
+    const parts = [state.project, state.client, state.pipeId]
+      .map((v) => (v || '').trim())
+      .filter((v) => v.length > 0);
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    const stamp = `${yyyy}${mm}${dd}_${hh}${min}`;
+    const base = parts.length ? `${parts.join('_')}_${stamp}` : `Markerlist_${stamp}`;
+    return sanitizeDocId(base);
+  };
+
+  const buildCloudJsonDefaultName = (fileName = '') => {
+    const cleaned = (fileName || '').replace(/\.json$/i, '');
+    if (cleaned) return sanitizeDocId(cleaned);
+    return buildCloudDefaultName();
+  };
+
+  const markDirty = () => {
+    if (state.onlineMode) dirtyCloud = true;
+    else dirtyLocal = true;
+  };
+
+  const ensureCloudNameForAutoSave = () => {
+    const current = getCloudNameInput();
+    if (current) return current;
+    const fallback = buildCloudNameFromForm();
+    if (fallback) {
+      setCloudFileName(fallback);
+      localStorage.setItem(cloudNameKey, fallback);
+      return fallback;
+    }
+    return '';
+  };
+
+  const scheduleCloudFileSave = () => {
+    if (!state.onlineMode || !onlineAuthed) return;
+    if (!ensureCloudNameForAutoSave()) return;
+    markDirty();
+    if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = setTimeout(() => {
+      cloudSaveTimer = null;
+      saveCloudFile();
+    }, 800);
   };
 
   const setCloudProjectStatus = (msg) => {
@@ -363,9 +459,44 @@
   };
 
   const setFirebaseStatus = (isOk) => {
-    if (!firebaseStatusDot) return;
-    firebaseStatusDot.classList.toggle('ok', !!isOk);
-    firebaseStatusDot.title = isOk ? 'Firebase connected' : 'Firebase disconnected';
+    const applyDot = (el) => {
+      if (!el) return;
+      el.classList.toggle('ok', !!isOk);
+      el.title = isOk ? 'Online' : 'Offline';
+    };
+    applyDot(firebaseStatusDot);
+    applyDot(loadJsonHeartbeat);
+    applyDot(saveJsonHeartbeat);
+  };
+
+  const openCloudFileModal = (mode = 'load') => {
+    if (!cloudFileModal) return;
+    if (!state.onlineMode) return;
+    cloudModalMode = mode;
+    if (cloudLoadSection) cloudLoadSection.style.display = '';
+    if (cloudSaveSection) cloudSaveSection.style.display = mode === 'load' ? 'none' : '';
+    if (cloudNameRow) cloudNameRow.style.display = mode === 'load' ? 'none' : '';
+    if (cloudLoadActions) cloudLoadActions.style.display = (mode === 'save' || mode === 'upload-json') ? 'none' : '';
+    if (mode === 'save' || mode === 'upload-json') {
+      const existingName = getCloudNameInput();
+      if (!existingName) {
+        const defName = buildCloudDefaultName();
+        setCloudFileName(defName);
+        localStorage.setItem(cloudNameKey, defName);
+      }
+    }
+    cloudFileModal.classList.add('show');
+    if (cloudStatusEl) cloudStatusEl.style.display = '';
+    if (state.onlineMode && onlineAuthed) loadCloudList();
+    if (cloudFileNameEl) cloudFileNameEl.focus();
+  };
+
+  const closeCloudFileModal = () => {
+    if (!cloudFileModal) return;
+    cloudFileModal.classList.remove('show');
+    if (cloudModalMode === 'upload-json') {
+      pendingCloudState = null;
+    }
   };
 
   const checkFirebaseConnection = () => {
@@ -394,7 +525,10 @@
     const options = [];
     snap.forEach((doc) => {
       const data = doc.data() || {};
-      const updatedAt = data.updatedAt ? new Date(data.updatedAt) : null;
+      const rawUpdated = data.updatedAt;
+      const updatedAt = rawUpdated
+        ? new Date(typeof rawUpdated?.toMillis === 'function' ? rawUpdated.toMillis() : rawUpdated)
+        : null;
       const labelDate = updatedAt ? updatedAt.toLocaleString() : 'unknown';
       const name = data.name || doc.id;
       options.push({ id: doc.id, name, label: `${name} — ${labelDate}` });
@@ -504,7 +638,7 @@
       render();
       saveLocal();
       lastCloudRemoteTs = ts || Date.now();
-      if (cloudFileNameEl) cloudFileNameEl.value = data.name || docId;
+      setCloudFileName(data.name || docId);
       localStorage.setItem(cloudNameKey, data.name || docId);
       setCloudStatus('Cloud file updated.');
     });
@@ -541,27 +675,47 @@
       setCloudStatus('Login required for cloud sync.');
       return;
     }
+    if (cloudSaveTimer) {
+      clearTimeout(cloudSaveTimer);
+      cloudSaveTimer = null;
+    }
     const name = getCloudNameInput() || state.project || '';
     const docId = getCloudDocId(name);
     if (!docId) {
       setCloudStatus('Enter a cloud file name.');
       return;
     }
-    if (cloudFileNameEl) cloudFileNameEl.value = name;
+    setCloudFileName(name);
     localStorage.setItem(cloudNameKey, name);
     setCloudStatus('Saving to cloud...');
-    const stateForCloud = buildExportState(state);
+    const stateForCloud = (() => {
+      if (!pendingCloudState) return buildExportState(state);
+      const prev = state;
+      state = pendingCloudState;
+      normalizeState();
+      const out = buildExportState(state);
+      state = prev;
+      return out;
+    })();
     ensureAuthReady()
       .then(() => firestoreDb.collection('markerfiles').doc(docId).set({
         name,
         state: stateForCloud,
-        updatedAt: Date.now(),
+        updatedAt: (firebase.firestore && firebase.firestore.FieldValue)
+          ? firebase.firestore.FieldValue.serverTimestamp()
+          : Date.now(),
         clientId
       }, { merge: true }))
       .then(() => {
         setCloudStatus('Saved to cloud.');
         loadCloudList();
         if (cloudFilesListEl) cloudFilesListEl.value = docId;
+        dirtyCloud = false;
+        lastCloudSavedAt = new Date();
+        updateCloudMetaSaved(lastCloudSavedAt);
+        startCloudFileListener(docId);
+        pendingCloudState = null;
+        closeCloudFileModal();
       })
       .catch(() => setCloudStatus('Failed to save cloud file.'));
   };
@@ -578,6 +732,7 @@
       return;
     }
     loadCloudFileById(docId, setCloudStatus);
+    closeCloudFileModal();
   };
 
   function loadCloudFileById(docId, statusSetter = setCloudStatus) {
@@ -612,8 +767,12 @@
         state.syncEnabled = prevSyncEnabled;
         render();
         saveLocal();
-        if (cloudFileNameEl) cloudFileNameEl.value = data.name || docId;
+        setCloudFileName(data.name || docId);
         localStorage.setItem(cloudNameKey, data.name || docId);
+        dirtyLocal = false;
+        dirtyCloud = false;
+        lastCloudSavedAt = data.updatedAt ? (typeof data.updatedAt?.toMillis === 'function' ? new Date(data.updatedAt.toMillis()) : new Date(data.updatedAt)) : null;
+        updateCloudMetaSaved(lastCloudSavedAt);
         startCloudFileListener(docId);
         statusSetter('Loaded from cloud.');
       })
@@ -683,15 +842,20 @@
     if (!state.onlineMode || !onlineAuthed || !firestoreDb || isApplyingRemote) return;
     const docId = getSyncDocId();
     if (!docId) return;
+    markDirty();
+    scheduleCloudFileSave();
     if (syncTimer) clearTimeout(syncTimer);
     syncTimer = setTimeout(() => {
+      syncTimer = null;
       const syncState = buildSyncPayload();
       const ref = firestoreDb.collection('markerlists').doc(docId);
       ref.set({
         ...syncState,
         updatedAt: Date.now(),
         clientId
-      }, { merge: true }).catch(() => {});
+      }, { merge: true })
+        .then(() => { dirtyCloud = false; })
+        .catch(() => {});
     }, 600);
   };
 
@@ -1411,6 +1575,7 @@
       const expVol = Number.isFinite(effectiveVol) ? ((total * Number(effectiveVol)) / 1000).toFixed(1) : '';
       const timeEl = table.querySelector(`[data-exp-time="${i}"]`);
       const volEl = table.querySelector(`[data-exp-vol="${i}"]`);
+      const totalEl = table.querySelector(`[data-total="${i}"]`);
       if (displayCoordsBtn) displayCoordsBtn.textContent = state.showCoords ? 'Hide coordinates' : 'Show coordinates';
       if (displayEpsgSelect) displayEpsgSelect.value = state.displayEpsg || 'EPSG:4326';
       if (timeEl) {
@@ -1424,6 +1589,7 @@
         p.expecteddate = expectedDate;
       }
       if (volEl) volEl.textContent = expVol;
+      if (totalEl) totalEl.textContent = total;
       if (p.time && !p.missed) ref = toSec(p.time);
       if (i < state.pts.length - 1 && v) ref += Number(p.distance || 0) / v;
       total += Number(p.distance || 0);
@@ -1535,7 +1701,10 @@
       cloudSyncDock.style.display = '';
     }
     if (androidMode && statusEl) statusEl.style.display = 'none';
-    if (cloudStatus) cloudStatus.style.display = androidMode ? '' : 'none';
+    if (cloudStatus) cloudStatus.style.display = (androidMode || (cloudFileModal && cloudFileModal.classList.contains('show'))) ? '' : 'none';
+    const showCloudMeta = state.onlineMode && onlineAuthed;
+    const cloudMetaEl = document.getElementById('cloudMeta');
+    if (cloudMetaEl) cloudMetaEl.style.display = showCloudMeta ? '' : 'none';
     if (androidMode && state.onlineMode && onlineAuthed && cloudFilesListEl && cloudFilesListEl.options.length === 0) {
       loadCloudList().then((hasItems) => {
         if (!hasItems) setTimeout(() => loadCloudList(), 800);
@@ -1553,10 +1722,13 @@
     if (exportBtn) exportBtn.disabled = operatorMode || androidMode;
     if (exportExcelBtn) exportExcelBtn.disabled = operatorMode || androidMode;
     if (exportKmzBtn) exportKmzBtn.disabled = operatorMode || androidMode;
+    if (exportKmzCloudBtn) exportKmzCloudBtn.disabled = operatorMode || androidMode;
     if (graphsBtn) graphsBtn.disabled = operatorMode || androidMode;
     if (displayEpsgSelect) displayEpsgSelect.disabled = operatorMode || androidMode;
     if (loadJsonBtn) loadJsonBtn.disabled = androidMode;
     if (saveJsonBtn) saveJsonBtn.disabled = androidMode;
+    if (loadJsonHeartbeat) loadJsonHeartbeat.style.display = state.onlineMode ? 'inline-block' : 'none';
+    if (saveJsonHeartbeat) saveJsonHeartbeat.style.display = state.onlineMode ? 'inline-block' : 'none';
     // Marker inputs honor lock except actual passing times
 
     if (modeSelectEl) modeSelectEl.value = state.mode || 'manual';
@@ -1575,7 +1747,7 @@
           headers: ['X (m)', 'Y (m)', 'Height (m)'],
           build: (p) => {
             const proj = projectForEpsg(p.latitude, p.longitude, code);
-            return [proj.x, proj.y, p.altitude != null ? p.altitude : ''];
+            return [proj.x, proj.y, p.altitude != null ? Number(p.altitude).toFixed(2) : ''];
           }
         };
       }
@@ -1584,7 +1756,7 @@
           headers: ['RD X (m)', 'RD Y (m)', 'Height (m)'],
           build: (p) => {
             const proj = projectForEpsg(p.latitude, p.longitude, code);
-            return [proj.x, proj.y, p.altitude != null ? p.altitude : ''];
+            return [proj.x, proj.y, p.altitude != null ? Number(p.altitude).toFixed(2) : ''];
           }
         };
       }
@@ -1593,13 +1765,13 @@
           headers: ['East (m)', 'North (m)', 'Zone', 'Height (m)'],
           build: (p) => {
             const proj = projectForEpsg(p.latitude, p.longitude, code);
-            return [proj.x, proj.y, proj.zone, p.altitude != null ? p.altitude : ''];
+            return [proj.x, proj.y, proj.zone, p.altitude != null ? Number(p.altitude).toFixed(2) : ''];
           }
         };
       }
       return {
         headers: ['Lat', 'Lon', 'Height (m)'],
-        build: (p) => [p.latitude != null ? p.latitude.toFixed(6) : '', p.longitude != null ? p.longitude.toFixed(6) : '', p.altitude != null ? p.altitude : '']
+        build: (p) => [p.latitude != null ? p.latitude.toFixed(6) : '', p.longitude != null ? p.longitude.toFixed(6) : '', p.altitude != null ? Number(p.altitude).toFixed(2) : '']
       };
     })();
 
@@ -1634,7 +1806,7 @@
       row.innerHTML = `
         <td><input value="${p.markername}" ${editLocked ? 'disabled' : ''} data-name="${i}"></td>
         <td></td>
-        ${showTotals ? `<td>${total}</td>` : ''}
+        ${showTotals ? `<td data-total="${i}">${total}</td>` : ''}
         ${coordCells.map((c) => `<td>${c ?? ''}</td>`).join('')}
         ${showExpVol ? `<td><span data-exp-vol="${i}">${expVol}</span></td>` : ''}
         <td><span data-exp-time="${i}">${ref && v ? toTime(ref) : ''}</span> ${androidMode ? '' : `<span class="hint" data-exp-date="${i}">${ref && v ? formatDateFromSeconds(ref, state.launchDate) : ''}</span>`}</td>
@@ -2327,6 +2499,53 @@
     }
   };
 
+  const pickLocalJsonFile = async () => {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await showOpenFilePicker({
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+          multiple: false
+        });
+        if (!handle) return null;
+        return handle.getFile();
+      } catch (e) {
+        if (e && e.name === 'AbortError') return null;
+        return null;
+      }
+    }
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.onchange = () => resolve(input.files && input.files[0] ? input.files[0] : null);
+      input.click();
+    });
+  };
+
+  const uploadLocalJsonToCloud = async () => {
+    if (!state.onlineMode) {
+      if (statusEl) statusEl.textContent = 'Switch to online mode to export to cloud.';
+      return;
+    }
+    if (!onlineAuthed) {
+      openLoginModal();
+      return;
+    }
+    const file = await pickLocalJsonFile();
+    if (!file) return;
+    try {
+      const text = await file.text();
+      pendingCloudState = JSON.parse(text);
+      const defaultName = buildCloudJsonDefaultName(file.name);
+      setCloudFileName(defaultName);
+      localStorage.setItem(cloudNameKey, defaultName);
+      openCloudFileModal('upload-json');
+      setCloudStatus('Ready to save JSON to cloud.');
+    } catch (err) {
+      setCloudStatus('Could not parse JSON file.');
+    }
+  };
+
   const computeColumnWidths = (doc, columns, rows, padding = 3, margin = 20) => {
     const avail = doc.internal.pageSize.getWidth() - margin;
     const widths = columns.map((col) => {
@@ -2946,6 +3165,7 @@
 
   const markPassNow = (idx) => {
     if (state.locked) return;
+    markDirty();
     const now = new Date();
     state.pts[idx].time = toTime(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
     state.pts[idx].lastby = getCurrentUserName();
@@ -2955,12 +3175,14 @@
 
   const addMarker = () => {
     if (isEditLocked()) return;
+    markDirty();
     const idx = state.pts.length - 1;
     state.pts.splice(idx, 0, { markername: `M${idx}`, distance: 0, time: '', missed: false, latitude: null, longitude: null, lastby: getCurrentUserName() });
     render();
   };
 
   const newProject = () => {
+    markDirty();
     state = defaultState();
     render();
     if (statusEl) statusEl.textContent = 'Started new project.';
@@ -2968,6 +3190,7 @@
 
   const removeMarker = (i) => {
     if (isEditLocked() || i === 0 || i === state.pts.length - 1) return;
+    markDirty();
     state.pts.splice(i, 1);
     render();
     scheduleSyncSave();
@@ -2975,6 +3198,7 @@
 
   const applyPaste = () => {
     if (isEditLocked() || !markerPaste) return;
+    markDirty();
     const lines = markerPaste.value.trim().split(/\r?\n/).filter(Boolean);
     if (!lines.length) return;
     state.pts = lines.map((l, i) => {
@@ -3076,6 +3300,10 @@
   };
 
   const saveJSON = async () => {
+    if (state.onlineMode) {
+      openCloudFileModal('save');
+      return;
+    }
     if (androidMode) {
       if (statusEl) statusEl.textContent = 'Local save is disabled in Android mode.';
       return;
@@ -3090,6 +3318,7 @@
         await w.write(data);
         await w.close();
         statusEl.textContent = 'Saved to file.';
+        dirtyLocal = false;
         return;
       } catch (e) {
         if (e && e.name === 'AbortError') return; // user canceled
@@ -3100,9 +3329,14 @@
     a.download = name;
     a.click();
     statusEl.textContent = 'Downloaded JSON.';
+    dirtyLocal = false;
   };
 
   const loadJSON = () => {
+    if (state.onlineMode) {
+      openCloudFileModal();
+      return;
+    }
     if (androidMode) {
       if (statusEl) statusEl.textContent = 'Local load is disabled in Android mode.';
       return;
@@ -3121,13 +3355,18 @@
 
   const setGpsStatus = (msg) => { if (gpsStatus) gpsStatus.textContent = msg; };
 
+  const roundAltitude = (val) => {
+    const n = Number(val);
+    return Number.isFinite(n) ? Number(n.toFixed(2)) : null;
+  };
+
   const setGpsData = (coords, opts = {}) => {
     gpsSourceEpsg = (opts.epsg || 'EPSG:4326').toUpperCase();
     gpsSourceUtmZone = opts.utmZone || '';
     gpsWorking = (coords || []).map((p) => ({
       lat: p.lat,
       lon: p.lon,
-      alt: p.alt ?? null,
+      alt: roundAltitude(p.alt),
       name: p.name || '',
       include: true,
       utm: p.utm ? { east: p.utm.east, north: p.utm.north } : null
@@ -3490,6 +3729,8 @@
         state.userName = prevUserName || state.userName;
         state.syncEnabled = prevSyncEnabled;
         render();
+        saveLocal();
+        dirtyLocal = false;
         statusEl.textContent = 'Loaded JSON.';
       } catch (err) {
         statusEl.textContent = 'Could not parse file.';
@@ -3715,6 +3956,9 @@
     if (exportPdfName) exportPdfName.value = exportExcelName.value;
   };
   if (exportKmzBtn) exportKmzBtn.onclick = openExportKmzModal;
+  if (exportKmzCloudBtn) exportKmzCloudBtn.onclick = () => {
+    uploadLocalJsonToCloud();
+  };
   if (graphsBtn) graphsBtn.onclick = showGraphs;
   if (exportKmzClose) exportKmzClose.onclick = closeExportKmzModal;
   bindModalClose(exportKmzModal, closeExportKmzModal);
@@ -3774,9 +4018,9 @@
   updateExcelCoordUi();
   renderExcelPreview();
 
-  projectEl.oninput = () => { state.project = projectEl.value; saveLocal(); };
-  if (clientEl) clientEl.oninput = () => { state.client = clientEl.value; saveLocal(); };
-  if (pipeIdEl) pipeIdEl.oninput = () => { state.pipeId = pipeIdEl.value; saveLocal(); };
+  projectEl.oninput = () => { state.project = projectEl.value; saveLocal(); scheduleCloudFileSave(); };
+  if (clientEl) clientEl.oninput = () => { state.client = clientEl.value; saveLocal(); scheduleCloudFileSave(); };
+  if (pipeIdEl) pipeIdEl.oninput = () => { state.pipeId = pipeIdEl.value; saveLocal(); scheduleCloudFileSave(); };
   if (syncEnabledEl) syncEnabledEl.onchange = () => {
     state.syncEnabled = !!syncEnabledEl.checked;
     saveLocal();
@@ -3789,9 +4033,11 @@
   };
   if (cloudFilesListEl) cloudFilesListEl.onchange = () => {
     const selectedOption = cloudFilesListEl.options[cloudFilesListEl.selectedIndex];
-    if (selectedOption && cloudFileNameEl) {
-      cloudFileNameEl.value = selectedOption.dataset.name || selectedOption.value || '';
-      localStorage.setItem(cloudNameKey, cloudFileNameEl.value.trim());
+    if (selectedOption) {
+      const selectedName = selectedOption.dataset.name || selectedOption.value || '';
+      setCloudFileName(selectedName);
+      localStorage.setItem(cloudNameKey, selectedName.trim());
+      updateCloudMetaSaved(null);
       if (state.syncEnabled) startSync();
     }
   };
@@ -3799,16 +4045,6 @@
   if (cloudLoadBtn) cloudLoadBtn.onclick = loadCloudFile;
   if (cloudDeleteBtn) cloudDeleteBtn.onclick = deleteCloudFile;
   if (cloudRefreshBtn) cloudRefreshBtn.onclick = loadCloudList;
-  if (cloudCopyFormBtn) cloudCopyFormBtn.onclick = () => {
-    const name = buildCloudNameFromForm();
-    if (!name) {
-      setCloudStatus('Enter Project, Client, and Pipe ID first.');
-      return;
-    }
-    if (cloudFileNameEl) cloudFileNameEl.value = name;
-    localStorage.setItem(cloudNameKey, name);
-    setCloudStatus('Cloud name copied from form.');
-  };
 
   const openLoginModal = () => {
     if (!loginModal) return;
@@ -3891,9 +4127,11 @@
     if (syncEnabledEl) syncEnabledEl.checked = false;
     stopSync();
     stopCloudListPolling();
+    closeCloudFileModal();
     render();
     saveLocal();
   };
+  if (cloudFileClose) cloudFileClose.onclick = closeCloudFileModal;
   if (cloudProjectCreateTab) cloudProjectCreateTab.onclick = () => setCloudProjectMode('create');
   if (cloudProjectOpenTab) cloudProjectOpenTab.onclick = () => setCloudProjectMode('open');
   if (cloudProjectClose) cloudProjectClose.onclick = closeCloudProjectModal;
@@ -3901,7 +4139,7 @@
   if (cloudProjectCreateBtn) cloudProjectCreateBtn.onclick = () => {
     const name = (cloudProjectName ? cloudProjectName.value : '').trim() || buildExportBaseName();
     if (cloudProjectName) cloudProjectName.value = name;
-    if (cloudFileNameEl) cloudFileNameEl.value = name;
+    setCloudFileName(name);
     saveCloudFile();
     closeCloudProjectModal();
   };
@@ -3917,15 +4155,16 @@
   if (loginPasswordEl) loginPasswordEl.onkeydown = (e) => {
     if (e.key === 'Enter') applyLogin();
   };
-  speedEl.oninput = () => { state.speed = speedEl.value; render(); };
-  flowEl.oninput = () => { state.flow = flowEl.value; render(); };
+  speedEl.oninput = () => { state.speed = speedEl.value; render(); scheduleCloudFileSave(); };
+  flowEl.oninput = () => { state.flow = flowEl.value; render(); scheduleCloudFileSave(); };
   flowOffsetEl.oninput = () => {
     const raw = flowOffsetEl.value;
     if (raw === '-' || raw === '') return; // allow typing minus before number
     state.offset = Number(raw) || 0;
     render();
+    scheduleCloudFileSave();
   };
-  volEl.oninput = () => { state.vol = volEl.value; render(); };
+  volEl.oninput = () => { state.vol = volEl.value; render(); scheduleCloudFileSave(); };
   if (pipeSizeEl) {
     pipeSizeEl.oninput = () => {
       state.pipeSize = pipeSizeEl.value;
@@ -3938,20 +4177,23 @@
         state.pipeWt = '';
       }
       render();
+      scheduleCloudFileSave();
     };
   }
   if (pipeWtEl) pipeWtEl.oninput = () => {
     state.pipeWt = pipeWtEl.value;
     state.pipeWtAuto = false;
     render();
+    scheduleCloudFileSave();
   };
-  if (launchDateEl) launchDateEl.oninput = () => { state.launchDate = launchDateEl.value; render(); };
-  launchEl.oninput = () => { state.launch = launchEl.value; render(); };
+  if (launchDateEl) launchDateEl.oninput = () => { state.launchDate = launchDateEl.value; render(); scheduleCloudFileSave(); };
+  launchEl.oninput = () => { state.launch = launchEl.value; render(); scheduleCloudFileSave(); };
 
   if (modeSelectEl) {
     modeSelectEl.onchange = () => {
       state.mode = modeSelectEl.value || 'manual';
       render();
+      scheduleCloudFileSave();
     };
   }
 
@@ -3983,6 +4225,7 @@
       if (!state.onlineMode) {
         stopCloudListPolling();
         stopCloudFileListener();
+        closeCloudFileModal();
       }
       if (state.onlineMode) ensureFirebaseAuth();
       if (!state.onlineMode) {
@@ -4000,6 +4243,7 @@
     const t = e.target;
     if (t.dataset.name) {
       if (isEditLocked()) return;
+      markDirty();
       state.pts[Number(t.dataset.name)].markername = t.value;
       state.pts[Number(t.dataset.name)].lastby = getCurrentUserName();
       scheduleSyncSave();
@@ -4007,6 +4251,7 @@
     }
     if (t.dataset.dist) {
       if (isEditLocked()) return;
+      markDirty();
       state.pts[Number(t.dataset.dist)].distance = Number(t.value) || 0;
       state.pts[Number(t.dataset.dist)].lastby = getCurrentUserName();
       updateExpectations(); // keep expected times in sync while typing distances
@@ -4015,6 +4260,7 @@
     }
     if (t.dataset.time) {
       const idx = Number(t.dataset.time);
+      markDirty();
       state.pts[idx].time = t.value;
       state.pts[idx].missed = false;
       state.pts[idx].lastby = getCurrentUserName();
@@ -4028,10 +4274,12 @@
     const t = e.target;
     if (isEditLocked() && (t.dataset.name || t.dataset.dist)) return;
     if (t.dataset.name || t.dataset.dist) {
+      markDirty();
       render();
       scheduleSyncSave();
     }
     if (t.dataset.time) {
+      markDirty();
       scheduleSyncSave();
     }
     // Time changes are handled live without full render to preserve focus while typing
@@ -4057,11 +4305,15 @@
 
   table.addEventListener('click', (e) => {
     const t = e.target;
-    if (t.dataset.del) removeMarker(Number(t.dataset.del));
+    if (t.dataset.del) {
+      markDirty();
+      removeMarker(Number(t.dataset.del));
+    }
     if (t.dataset.missed) {
       const idx = Number(t.dataset.missed);
       const p = state.pts[idx];
       if (p) {
+        markDirty();
         const nowMissed = !p.missed;
         p.missed = nowMissed;
         p.time = '';
@@ -4108,9 +4360,17 @@
     }
   };
 
+  window.addEventListener('beforeunload', (e) => {
+    const hasUnsaved = dirtyLocal || dirtyCloud || !!cloudSaveTimer || !!syncTimer;
+    if (!hasUnsaved) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
   normalizeState();
   const cachedCloudName = localStorage.getItem(cloudNameKey);
-  if (cloudFileNameEl && cachedCloudName) cloudFileNameEl.value = cachedCloudName;
+  if (cachedCloudName) setCloudFileName(cachedCloudName);
+  updateCloudMetaSaved(lastCloudSavedAt);
   render();
   if (state.onlineMode && !onlineAuthed) openLoginModal();
   if (state.syncEnabled) startSync();
