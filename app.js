@@ -616,31 +616,65 @@
   };
 
   const startCloudFileListener = (docId) => {
-    if (!state.onlineMode || !onlineAuthed) return;
-    if (!docId || !firestoreDb) return;
+    if (!state.onlineMode || !onlineAuthed) {
+      console.log('[CloudSync] Listener not started: onlineMode=', state.onlineMode, 'onlineAuthed=', onlineAuthed);
+      return;
+    }
+    if (!docId || !firestoreDb) {
+      console.log('[CloudSync] Listener not started: no docId or firestoreDb');
+      return;
+    }
     stopCloudFileListener();
+    console.log('[CloudSync] Starting listener for docId:', docId);
     const ref = firestoreDb.collection('markerfiles').doc(docId);
     cloudFileUnsub = ref.onSnapshot((snap) => {
+      console.log('[CloudSync] Snapshot received, exists:', snap.exists);
       if (!snap.exists) return;
       const data = snap.data() || {};
-      if (data.clientId === clientId) return;
-      const ts = Number(data.updatedAt || 0);
-      if (ts && ts <= lastCloudRemoteTs) return;
-      if (!data.state) return;
+      console.log('[CloudSync] Data clientId:', data.clientId, 'our clientId:', clientId);
+      // Only ignore if it's our own update (from this browser session)
+      if (data.clientId && data.clientId === clientId) {
+        console.log('[CloudSync] Ignoring own update');
+        return;
+      }
+      // Check if we have either state.pts or state object
+      const remoteState = data.state;
+      if (!remoteState && !data.pts) {
+        console.log('[CloudSync] No state or pts in data');
+        return;
+      }
+      console.log('[CloudSync] Applying remote update');
       const prevOnlineMode = state.onlineMode;
       const prevUserName = state.userName;
       const prevSyncEnabled = state.syncEnabled;
-      state = data.state;
+      
+      // If remoteState only contains pts (from Android), merge with current state
+      if (remoteState) {
+        const remotePts = remoteState.pts;
+        if (remotePts && Object.keys(remoteState).length === 1) {
+          // Android app only sends { pts: [...] }, merge with current state
+          console.log('[CloudSync] Merging pts from Android app');
+          state.pts = normalizePoints(remotePts);
+        } else {
+          // Full state from web app
+          state = remoteState;
+        }
+      } else if (data.pts) {
+        // Direct pts array (legacy format)
+        state.pts = normalizePoints(data.pts);
+      }
+      
       normalizeState();
       state.onlineMode = prevOnlineMode;
       state.userName = prevUserName || state.userName;
       state.syncEnabled = prevSyncEnabled;
       render();
       saveLocal();
-      lastCloudRemoteTs = ts || Date.now();
       setCloudFileName(data.name || docId);
       localStorage.setItem(cloudNameKey, data.name || docId);
       setCloudStatus('Cloud file updated.');
+    }, (error) => {
+      console.error('[CloudSync] Listener error:', error);
     });
   };
 
@@ -773,6 +807,8 @@
         dirtyCloud = false;
         lastCloudSavedAt = data.updatedAt ? (typeof data.updatedAt?.toMillis === 'function' ? new Date(data.updatedAt.toMillis()) : new Date(data.updatedAt)) : null;
         updateCloudMetaSaved(lastCloudSavedAt);
+        // Reset remote timestamp to allow receiving new updates
+        lastCloudRemoteTs = 0;
         startCloudFileListener(docId);
         statusSetter('Loaded from cloud.');
       })
@@ -827,7 +863,8 @@
       if (!snap.exists) return;
       const data = snap.data() || {};
       if (data.clientId === clientId) return;
-      const ts = Number(data.updatedAt || 0);
+      const rawTs = data.updatedAt;
+      const ts = rawTs && typeof rawTs.toMillis === 'function' ? rawTs.toMillis() : Number(rawTs || 0);
       if (ts && ts <= lastRemoteTs) return;
       if (!data.pts) return;
       isApplyingRemote = true;
